@@ -1,0 +1,152 @@
+{
+  "git": {
+    "package": "mcp-server-git",
+    "version": "2026.8.18",
+    "tools": {
+      "git_status": {
+        "properties": {
+          "repo_path": {
+            "title": "Repo Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo_path"
+        ],
+        "title": "GitStatus",
+        "type": "object"
+      },
+      "git_diff_unstaged": {
+        "properties": {
+          "repo_path": {
+            "title": "Repo Path",
+            "type": "string"
+          },
+          "context_lines": {
+            "default": 3,
+            "title": "Context Lines",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "repo_path"
+        ],
+        "title": "GitDiffUnstaged",
+        "type": "object"
+      },
+      "git_log": {
+        "properties": {
+          "repo_path": {
+            "title": "Repo Path",
+            "type": "string"
+          },
+          "max_count": {
+            "default": 10,
+            "title": "Max Count",
+            "type": "integer"
+          },
+          "start_timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Start timestamp for filtering commits. Accepts: ISO 8601 format (e.g., '2024-01-15T14:30:25'), relative dates (e.g., '2 weeks ago', 'yesterday'), or absolute dates (e.g., '2024-01-15', 'Jan 15 2024')",
+            "title": "Start Timestamp"
+          },
+          "end_timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "End timestamp for filtering commits. Accepts: ISO 8601 format (e.g., '2024-01-15T14:30:25'), relative dates (e.g., '2 weeks ago', 'yesterday'), or absolute dates (e.g., '2024-01-15', 'Jan 15 2024')",
+            "title": "End Timestamp"
+          }
+        },
+        "required": [
+          "repo_path"
+        ],
+        "title": "GitLog",
+        "type": "object"
+      },
+      "git_show": {
+        "properties": {
+          "repo_path": {
+            "title": "Repo Path",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo_path",
+          "revision"
+        ],
+        "title": "GitShow",
+        "type": "object"
+      }
+    }
+  },
+  "semgrep": {
+    "package": "semgrep",
+    "version": "1.181.0",
+    "tools": {
+      "semgrep_scan_with_custom_rule": {
+        "$defs": {
+          "CodeFile": {
+            "properties": {
+              "path": {
+                "description": "Path of the code file",
+                "title": "Path",
+                "type": "string"
+              },
+              "content": {
+                "description": "Content of the code file",
+                "title": "Content",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ],
+            "title": "CodeFile",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "code_files": {
+            "description": "List of dictionaries with 'path' and 'content' keys",
+            "items": {
+              "$ref": "#/$defs/CodeFile"
+            },
+            "title": "Code Files",
+            "type": "array"
+          },
+          "rule": {
+            "description": "Semgrep YAML rule string",
+            "title": "Rule",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code_files",
+          "rule"
+        ],
+        "title": "semgrep_scan_with_custom_ruleArguments",
+        "type": "object"
+      }
+    }
+  }
+}

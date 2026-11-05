@@ -1,0 +1,11 @@
+rules:
+  - id: kernelcoder.python-eval
+    languages: [python]
+    severity: ERROR
+    message: Review dynamic evaluation of Python code.
+    pattern: eval(...)
+  - id: kernelcoder.python-shell-true
+    languages: [python]
+    severity: WARNING
+    message: Review shell command execution with shell=True.
+    pattern: subprocess.$FUNC(..., shell=True, ...)

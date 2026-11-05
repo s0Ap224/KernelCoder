@@ -1,0 +1,4 @@
+# Curated services share MCP SDK 1.x. Git 2026.10.19 requires SDK 2.x.
+semgrep==1.181.0
+mcp-server-git==2026.8.18
+mcp==1.29.0
