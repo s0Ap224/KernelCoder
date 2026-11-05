@@ -188,7 +188,7 @@ class LocalMCPRunner:
                 # nested task path can exceed the socket path limit. OS temp
                 # also avoids inheriting the source repo's .gitignore rules.
                 with tempfile.TemporaryDirectory(prefix="ccm-") as temp, ExitStack() as processes:
-                    root = Path(temp)
+                    root = Path(temp).resolve()  # Canonicalize OS temp aliases (macOS /var -> /private/var).
                     home, view = root / "home", root / "input"
                     home.mkdir()
                     view.mkdir()

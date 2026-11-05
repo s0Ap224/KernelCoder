@@ -18,7 +18,7 @@ from tests.conftest import get_tool
 
 
 def test_version():
-    # regex instead of tomllib: the latter only exists on 3.11+ and CI runs 3.10
+    # Keep the runtime version aligned with package metadata.
     m = re.search(r'(?m)^version = "([^"]+)"', Path("pyproject.toml").read_text())
     assert m is not None
     assert __version__ == m.group(1)

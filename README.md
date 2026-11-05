@@ -14,7 +14,7 @@ A terminal coding agent with local execution, E2B workspaces, and explicit revie
 
 ## Install from source
 
-Requires Python 3.10+ and Git. Windows local execution also requires Git Bash, included in Git for Windows.
+Requires Python 3.11+ and Git. Windows local execution also requires Git Bash, included in Git for Windows.
 
 ```powershell
 git clone https://github.com/s0Ap224/KernelCoder.git
@@ -76,7 +76,7 @@ python -m build
 python -m twine check dist/*
 ```
 
-The default test suite uses mocks for external services. Live E2B tests require explicit `--run-e2b` and configured credentials. CI runs tests on Windows, macOS, and Linux with Python 3.10–3.13, plus lint and package checks.
+The default test suite uses mocks for external services. Live E2B tests require explicit `--run-e2b` and configured credentials. CI runs tests on Windows, macOS, and Linux with Python 3.11–3.13, plus lint and package checks.
 
 ## License
 

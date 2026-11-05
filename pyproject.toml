@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Readable AI coding agent with staged workspaces and reviewed writeback. Works with any compatible LLM."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 maintainers = [
     { name = "s0Ap224" },
 ]
@@ -19,7 +19,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -52,7 +51,7 @@ Issues = "https://github.com/s0Ap224/KernelCoder/issues"
 
 [tool.ruff]
 line-length = 130
-target-version = "py310"
+target-version = "py311"
 
 [tool.hatch.build.targets.sdist]
 include = ["/kernelcoder", "/tests", "/scripts", "/requirements", "/examples", "/docs", "/sandbox", "/article", "/LICENSE", "/README.md", "/README_CN.md", "/.env.example", "/pyproject.toml"]

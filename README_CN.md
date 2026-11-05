@@ -14,7 +14,7 @@
 
 ## 从源码安装
 
-需要 Python 3.10+ 和 Git。Windows 本地执行还需要 Git for Windows 自带的 Git Bash。
+需要 Python 3.11+ 和 Git。Windows 本地执行还需要 Git for Windows 自带的 Git Bash。
 
 ```powershell
 git clone https://github.com/s0Ap224/KernelCoder.git
@@ -76,7 +76,7 @@ python -m build
 python -m twine check dist/*
 ```
 
-默认测试使用外部服务替身；真实 E2B 测试需要显式添加 `--run-e2b` 并配置凭据。CI 覆盖 Windows、macOS、Linux 与 Python 3.10–3.13，同时执行代码检查和构建检查。
+默认测试使用外部服务替身；真实 E2B 测试需要显式添加 `--run-e2b` 并配置凭据。CI 覆盖 Windows、macOS、Linux 与 Python 3.11–3.13，同时执行代码检查和构建检查。
 
 ## 许可证
 

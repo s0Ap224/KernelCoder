@@ -37,8 +37,8 @@ function Add-KernelCoderPath([string]$Scripts) {
 function Install-KernelCoder([string]$RepositoryRoot, [string]$PythonCommand) {
     $venvPython = Join-Path $RepositoryRoot '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
-        Invoke-KernelCoderPython $PythonCommand @('-c', 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)') `
-            'Python 3.10+ is required. Install Python and retry.'
+        Invoke-KernelCoderPython $PythonCommand @('-c', 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)') `
+            'Python 3.11+ is required. Install Python and retry.'
         Invoke-KernelCoderPython $PythonCommand @('-m', 'venv', (Join-Path $RepositoryRoot '.venv')) `
             'Virtual environment creation failed. Check your Python installation.'
     }

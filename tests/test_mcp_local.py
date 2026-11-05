@@ -36,6 +36,7 @@ def manager(task):
 
 
 def test_registration_is_lazy_without_e2b_or_subprocess(task, monkeypatch):
+    monkeypatch.setattr("kernelcoder.prompt.platform.uname", lambda: SimpleNamespace(system="test", release="0", machine="test"))
     monkeypatch.setattr("subprocess.Popen", Mock(side_effect=AssertionError("process started")))
     monkeypatch.setattr("kernelcoder.sandbox.SandboxRunner.check", Mock(side_effect=AssertionError("E2B reached")))
     manager = MCPManager(task)
@@ -246,6 +247,39 @@ def test_git_view_handles_file_directory_transitions(task, tmp_path):
     manager.runner._git_view(view, task.scan(), clean_environment(home, sys.executable))
     assert (view / "a.py" / "new.py").read_text() == "nested = True\n"
     assert (task.original / "a.py").read_text() == "x = 1\n"
+
+
+def test_managed_scan_accepts_os_temp_alias(manager, monkeypatch, tmp_path):
+    from contextlib import contextmanager
+    from pathlib import Path
+
+    import kernelcoder.mcp_local as local
+
+    real = tmp_path / "real-temp"
+    real.mkdir()
+    alias = tmp_path / "temp-alias"
+    try:
+        alias.symlink_to(real, target_is_directory=True)
+    except OSError:
+        pytest.skip("Directory symlinks are unavailable")
+    original_temporary_directory = local.tempfile.TemporaryDirectory
+
+    @contextmanager
+    def linked_temp(**kwargs):
+        with original_temporary_directory(dir=real, **kwargs) as directory:
+            yield str(alias / Path(directory).name)
+
+    monkeypatch.setattr(local.tempfile, "TemporaryDirectory", linked_temp)
+    monkeypatch.setattr(manager.runner, "_versions", lambda env: {})
+    client = Mock(stderr="", tool_specs=[{"name": name, "inputSchema": schema}
+                  for name, schema in manager.profiles["semgrep"].tools.items()])
+    client.call_result.return_value = {"content": []}
+    factory = Mock(return_value=client)
+    monkeypatch.setattr(local, "MCPClient", factory)
+    result = manager.runner.run("semgrep", "semgrep_scan_with_custom_rule", {"paths": ["a.py"]})
+    assert result.status == "completed", result.detail
+    assert factory.call_args.kwargs["cwd"].is_relative_to(real.resolve())
+    assert client.call_result.call_args.args[1]["code_files"] == [{"path": "a.py", "content": "x = 1\n"}]
 
 
 def test_real_local_git_and_semgrep(task, monkeypatch):
