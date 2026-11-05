@@ -279,7 +279,8 @@ def test_managed_scan_accepts_os_temp_alias(manager, monkeypatch, tmp_path):
     result = manager.runner.run("semgrep", "semgrep_scan_with_custom_rule", {"paths": ["a.py"]})
     assert result.status == "completed", result.detail
     assert factory.call_args.kwargs["cwd"].is_relative_to(real.resolve())
-    assert client.call_result.call_args.args[1]["code_files"] == [{"path": "a.py", "content": "x = 1\n"}]
+    original_content = (manager.workspace.tree / "a.py").read_bytes().decode("utf-8")
+    assert client.call_result.call_args.args[1]["code_files"] == [{"path": "a.py", "content": original_content}]
 
 
 def test_real_local_git_and_semgrep(task, monkeypatch):
