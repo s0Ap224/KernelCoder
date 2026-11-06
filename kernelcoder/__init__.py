@@ -1,4 +1,6 @@
-"""KernelCoder - Minimal AI coding agent inspired by Claude Code's architecture."""
+"""KernelCoder - Minimal AI coding agent inspired by Claude Code's architecture.
+KernelCoder python包入口。将常用对象放到包的顶层。
+"""
 
 __version__ = "0.1.0"
 
