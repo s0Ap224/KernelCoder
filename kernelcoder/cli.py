@@ -22,7 +22,7 @@ from .mcp_local import MCPManager
 from .permissions import DEFAULT_STORE, Permission
 from .sandbox import SandboxRunner
 from .session import list_sessions, load_context_state, load_session, save_session, session_sandbox_id
-from .skills import SkillLoader, SkillTool
+from .skills import SkillLoader
 from .tools import ALL_TOOLS
 from .tools.bash import BashTool
 from .workspace import SandboxWorkspace, WorkspaceError
@@ -166,8 +166,6 @@ def _main(args):
         temperature=config.temperature,
         max_tokens=config.max_tokens,
     )
-    skill_loader = SkillLoader()
-    skill_tools = [SkillTool(skill_loader)] if skill_loader.skills else []
     workspace = None
     try:
         if args.sandbox == "e2b":
@@ -185,6 +183,8 @@ def _main(args):
         console.print(f"Sandbox unavailable: {e}", markup=False)
         raise SystemExit(1) from e
     tools = [type(t)() for t in ALL_TOOLS if t.name != "bash"]
+    skill_loader = (SkillLoader([workspace.tree / ".kernelcoder" / "skills",
+                                 Path.home() / ".kernelcoder" / "skills"]) if workspace else SkillLoader())
     tools.insert(0, BashTool(workspace, runner, unsafe=args.sandbox == "unsafe"))
     manager = None
     try:
@@ -216,12 +216,13 @@ def _main(args):
     )
     agent = Agent(
         llm=llm,
-        tools=[*tools, *skill_tools, *(manager.tools if manager else
+        tools=[*tools, *(manager.tools if manager else
                                      load_mcp_tools() if workspace is None and args.mcp_backend != "off" else [])],
         max_context_tokens=config.max_context_tokens,
         permission=permission,
         hooks=load_hooks() if workspace is None else None,
         workspace=workspace,
+        skill_loader=skill_loader,
     )
     agent.mcp_manager = manager
 
@@ -410,6 +411,11 @@ def _repl(agent: Agent, config: Config):
         if user_input == "/help":
             _show_help()
             continue
+        if user_input in {"/skills", "/skills reload"}:
+            if user_input.endswith(" reload"):
+                agent.reload_skills()
+            console.print(agent.describe_skills(), markup=False)
+            continue
         if user_input == "/sandbox" or user_input.startswith("/sandbox "):
             action = user_input.partition(" ")[2] or "status"
             if not agent.workspace:
@@ -540,7 +546,7 @@ def _repl(agent: Agent, config: Config):
             continue
 
         # an unknown /command shouldn't be sent to the model as a prompt
-        if user_input.startswith("/"):
+        if user_input.startswith("/") and user_input.split(maxsplit=1)[0] != "/skill":
             console.print(f"[yellow]Unknown command: {user_input.split()[0]} (try /help)[/yellow]")
             continue
 
@@ -616,6 +622,8 @@ def _show_help():
         "  /model <name>  Switch model mid-conversation\n"
         "  /tokens        Show token usage\n"
         "  /compact       Compress conversation context\n"
+        "  /skills        List skills and diagnostics; /skills reload refreshes them\n"
+        "  /skill NAME    Load a skill explicitly, optionally followed by a task\n"
         "  /diff          Show files modified this session\n"
         "  /sandbox      status|diff|apply|discard|cleanup (apply is explicit, never --yes)\n"
         "  /undo          Revert the most recent file change\n"

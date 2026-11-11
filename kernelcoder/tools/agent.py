@@ -54,6 +54,7 @@ class AgentTool(Tool):
             hooks=parent.hooks,
             workspace=parent.workspace,
             conversation_id=parent.context.store.conversation_id,
+            skill_loader=parent.skill_loader,
         )
         sub.plan_mode = parent.plan_mode
 

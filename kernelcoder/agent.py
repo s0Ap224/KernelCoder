@@ -13,12 +13,14 @@ import concurrent.futures
 import contextvars
 import copy
 import inspect
+import json
+import uuid
 
 from .context import ContextManager, is_context_overflow
-from .llm import LLM
+from .llm import LLM, LLMResponse, ToolCall
 from .mcp_local import ManagedMCPTool
 from .permissions import Permission
-from .prompt import PLAN_MODE_PROMPT, system_prompt
+from .prompt import PLAN_MODE_PROMPT, SKILL_PROMPT, system_prompt
 from .skills import SkillTool
 from .tools import ALL_TOOLS
 from .tools.agent import AgentTool
@@ -48,10 +50,16 @@ class Agent:
         hooks=None,
         workspace=None,
         conversation_id=None,
+        skill_loader=None,
     ):
         self.llm = llm
         self.workspace = workspace
         self.tools = list(tools) if tools is not None else [type(t)() for t in ALL_TOOLS]
+        self.skill_loader = skill_loader or next((t.loader for t in self.tools if type(t) is SkillTool), None)
+        if self.skill_loader is not None:
+            self.tools = [t for t in self.tools if type(t) is not SkillTool]
+            if self.skill_loader.skills:
+                self.tools.append(SkillTool(self.skill_loader))
         self.context = ContextManager(max_tokens=max_context_tokens, conversation_id=conversation_id)
         # A sub-agent must never inherit its parent's archive-reading capability.
         self.tools = [t for t in self.tools if not isinstance(t, ReadTranscriptTool)]
@@ -88,6 +96,8 @@ class Agent:
     def _full_messages(self) -> list[dict]:
         """原始message + 系统提示词 + plan_mode 提示词（潜在） + _todo信息（潜在）"""
         system = self._system
+        if self.skill_loader is not None and self.skill_loader.skills:
+            system += "\n\n" + SKILL_PROMPT + "\n" + self.skill_loader.summary()
         # re-injected every round, like the task list below, so a toggle made
         # between turns takes effect on the very next request
         if self.plan_mode:
@@ -103,11 +113,61 @@ class Agent:
     def _tool_schemas(self) -> list[dict]:
         return [t.schema() for t in self.tools]
 
+    def reload_skills(self):
+        """Refresh the catalog and activation tool, including empty -> nonempty."""
+        if self.skill_loader is None:
+            return
+        self.skill_loader.scan()
+        self.tools = [t for t in self.tools if type(t) is not SkillTool]
+        if self.skill_loader.skills:
+            self.tools.append(SkillTool(self.skill_loader))
+        self._tool_by_name = {t.name: t for t in self.tools}
+        self._system = system_prompt(self.tools, sandbox=self.workspace is not None)
+
+    def describe_skills(self):
+        from .context import estimate_tokens
+
+        if self.skill_loader is None:
+            return "No skills configured."
+        catalog = self.skill_loader.summary()
+        size = estimate_tokens([{"role": "system", "content": SKILL_PROMPT + "\n" + catalog}]) if catalog else 0
+        lines = [f"Skills: {len(self.skill_loader.skills)}; catalog ~{size} tokens", catalog or "(no skills found)"]
+        lines.extend(f"Directory: {path}" for path in self.skill_loader.directories)
+        lines.extend(f"Warning: {item}" for item in self.skill_loader.diagnostics)
+        return "\n".join(lines)
+
     def chat(self, user_input: str, on_token=None, on_tool=None, on_reasoning=None) -> str:
         """Process one user message. May involve multiple LLM/tool rounds."""
+        explicit_skill = None
+        if user_input.split(maxsplit=1)[:1] == ["/skill"]:
+            parts = user_input.split(maxsplit=2)
+            if len(parts) < 2:
+                return "Usage: /skill NAME [task]"
+            explicit_skill = parts[1]
+            if self.skill_loader is None or explicit_skill not in self.skill_loader.skills:
+                return f"Error: unknown skill {explicit_skill!r}. Use /skills to list available skills."
         message = {"role": "user", "content": user_input}
         self.context.begin_turn(message)
         self._append_message(message)
+
+        if explicit_skill is not None:
+            # An explicitly requested, actually executed call, using the same
+            # hooks, permission checks, workspace guard and paired history.
+            tc = ToolCall(id=uuid.uuid4().hex, name="load_skill", arguments={"skill": explicit_skill})
+            self._append_message(LLMResponse(tool_calls=[tc]).message)
+            try:
+                if on_tool:
+                    on_tool(tc.name, tc.arguments)
+                result = self._pre_hooks(tc) or self._permit(tc)
+                if result is None:
+                    result = self._exec_tool(tc)
+                    self._post_hooks(tc, result)
+                self._append_message({"role": "tool", "tool_call_id": tc.id, "content": result})
+            except KeyboardInterrupt:
+                self._answer_pending_tool_calls([tc])
+                raise
+            if not result.startswith(f"Skill: {explicit_skill}\nVersion:"):
+                return result
 
         for _ in range(self.max_rounds):
             self.prepare_context()
@@ -160,6 +220,7 @@ class Agent:
                             "content": result,
                         }
                         if ingestion_error is not None:
+                            self._remember_skill(message)
                             self.messages.append(message)
                         else:
                             try:
@@ -177,8 +238,19 @@ class Agent:
         return "(reached maximum tool-call rounds)"
 
     def _append_message(self, message):
+        self._remember_skill(message)
         self.messages.append(message)
         return self.context.receive(self.messages)
+
+    def _remember_skill(self, message):
+        """Register successful skill results even when archival has failed."""
+        if message.get("role") == "tool" and type(self._tool_by_name.get("load_skill")) is SkillTool:
+            call = next((c for m in reversed(self.messages) for c in m.get("tool_calls", [])
+                         if c.get("id") == message.get("tool_call_id")), None)
+            if call and call.get("function", {}).get("name") == "load_skill":
+                name = json.loads(call["function"]["arguments"]).get("skill")
+                if (message.get("content") or "").startswith(f"Skill: {name}\nVersion:"):
+                    self.context.activate_skill(self.messages, message, name)
 
     def prepare_context(self, *, force=False, reactive=False):
         extra = getattr(self.llm, "extra", {})

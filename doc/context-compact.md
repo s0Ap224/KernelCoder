@@ -4,6 +4,8 @@ Context Compact 由 Agent Loop 的五处调度逻辑和四种压缩机制组成�
 
 本文对应当前的 [Agent Loop](../kernelcoder/agent.py) 和 [ContextManager](../kernelcoder/context.py) 实现。
 
+Skill 加载新增一项保护：本轮已激活的完整技能正文不参与工具预览或历史摘要，条数裁剪保留其完整调用批次。新用户请求开始时解除上一轮技能保护，需要使用时重新加载；详见 [Skill 发现与按需加载](skill-loading.md)。
+
 ## 1. 整条链路
 
 ```text

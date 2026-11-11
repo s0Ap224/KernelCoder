@@ -83,7 +83,26 @@ class ContextManager:
         self._records = {id(m): (m, self._meta(m)) for m in messages}
 
     def begin_turn(self, message):
+        # Skill activation is scoped to one user turn. A continuation can load
+        # again and reuse a still-visible, identical version of the instructions.
+        for _, meta in self._records.values():
+            meta.pop("skill_active", None)
         self.active_id = self._meta(message)["id"]
+
+    def activate_skill(self, messages, message, name):
+        """Pin full skill instructions before receive() can trim the tool result."""
+        for old in messages:
+            meta = self._meta(old)
+            if meta.get("skill_name") == name:
+                meta.pop("skill_active", None)
+        for old in messages:
+            meta = self._meta(old)
+            if (meta.get("kind") == "skill" and meta.get("skill_name") == name
+                    and not meta.get("original") and old.get("content") == message.get("content")):
+                meta["skill_active"] = True
+                message["content"] = f"[Skill {name}: identical full instructions are still in context; reused.]"
+                return
+        self._meta(message).update(kind="skill", skill_name=name, skill_active=True)
 
     def mark_seen(self, messages):
         for m in messages:
@@ -128,7 +147,8 @@ class ContextManager:
         protected = {i for i, m in enumerate(messages) if self._meta(m)["id"] == self.active_id}
         units, _ = self.units(messages)
         for unit in units:
-            if any(messages[i].get("role") == "tool" and not self._meta(messages[i])["seen"] for i in unit):
+            if any(self._meta(messages[i]).get("skill_active") or
+                   (messages[i].get("role") == "tool" and not self._meta(messages[i])["seen"]) for i in unit):
                 protected.update(unit)
         return protected
 
@@ -144,6 +164,8 @@ class ContextManager:
     def _preview(self, message, chars, stage, result):
         text = message.get("content") or ""
         meta = self._meta(message)
+        if meta.get("skill_active"):
+            return False
         # Preview always derives from the original prefix, never from a prior marker.
         prefix = meta.get("prefix", text[:self.PREVIEW])[:chars]
         ref = meta.get("original", "0" * 32)
@@ -337,7 +359,7 @@ class ContextManager:
         if result.after_tokens > budget:
             raise ContextLimitError(
                 f"Context needs {result.after_tokens} tokens; history budget is {budget}. "
-                f"Protected request/tool calls were preserved. {result.error or ''}"
+                f"Protected request/tool calls/active skills were preserved. {result.error or ''}"
             )
         return result
 
