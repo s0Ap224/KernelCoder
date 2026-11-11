@@ -53,6 +53,7 @@ class AgentTool(Tool):
             permission=parent.permission,
             hooks=parent.hooks,
             workspace=parent.workspace,
+            conversation_id=parent.context.store.conversation_id,
         )
         sub.plan_mode = parent.plan_mode
 

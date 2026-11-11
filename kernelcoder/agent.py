@@ -14,7 +14,7 @@ import contextvars
 import copy
 import inspect
 
-from .context import ContextManager
+from .context import ContextManager, is_context_overflow
 from .llm import LLM
 from .mcp_local import ManagedMCPTool
 from .permissions import Permission
@@ -27,6 +27,7 @@ from .tools.glob_tool import GlobTool
 from .tools.grep import GrepTool
 from .tools.read import ReadFileTool
 from .tools.todo import TodoWriteTool
+from .tools.transcript import ReadTranscriptTool
 
 _PARALLEL_READ_IMPLEMENTATIONS = {
     "read_file": ReadFileTool,
@@ -46,10 +47,15 @@ class Agent:
         permission=None,
         hooks=None,
         workspace=None,
+        conversation_id=None,
     ):
         self.llm = llm
         self.workspace = workspace
         self.tools = list(tools) if tools is not None else [type(t)() for t in ALL_TOOLS]
+        self.context = ContextManager(max_tokens=max_context_tokens, conversation_id=conversation_id)
+        # A sub-agent must never inherit its parent's archive-reading capability.
+        self.tools = [t for t in self.tools if not isinstance(t, ReadTranscriptTool)]
+        self.tools.append(ReadTranscriptTool(self.context))
         # A shared AgentTool must never acquire a different parent's policy.
         self.tools = [copy.copy(t) if isinstance(t, AgentTool) else t for t in self.tools]
         self.permission = permission
@@ -63,7 +69,6 @@ class Agent:
         self._tool_by_name = {t.name: t for t in self.tools}
         # 工程级设计，每个（子）agent只认它的一套工具。
         self.messages: list[dict] = []
-        self.context = ContextManager(max_tokens=max_context_tokens)
         self.max_rounds = max_rounds
         self._system = system_prompt(self.tools, sandbox=workspace is not None)
         self.plan_mode = False  # toggled by /plan; while on, mutating tools are refused
@@ -100,25 +105,33 @@ class Agent:
 
     def chat(self, user_input: str, on_token=None, on_tool=None, on_reasoning=None) -> str:
         """Process one user message. May involve multiple LLM/tool rounds."""
-        self.messages.append({"role": "user", "content": user_input})
-        self.context.maybe_compress(self.messages, self.llm)
+        message = {"role": "user", "content": user_input}
+        self.context.begin_turn(message)
+        self._append_message(message)
 
         for _ in range(self.max_rounds):
-            resp = self.llm.chat(
-                messages=self._full_messages(),
-                tools=self._tool_schemas(),
-                on_token=on_token,
-                on_reasoning=on_reasoning,
-            )
+            self.prepare_context()
+            for retry in range(2):
+                try:
+                    resp = self.llm.chat(
+                        messages=self._full_messages(), tools=self._tool_schemas(),
+                        on_token=on_token, on_reasoning=on_reasoning,
+                    )
+                    break
+                except Exception as error:
+                    if retry or not is_context_overflow(error):
+                        raise
+                    self.prepare_context(force=True, reactive=True)
+            self.context.mark_seen(self.messages)
 
             # no tool calls -> LLM is done, return text
             if not resp.tool_calls:
-                self.messages.append(resp.message)
+                self._append_message(resp.message)
                 return resp.content
 
             # tool calls -> execute (parallel when multiple, like Claude Code's
             # StreamingToolExecutor which runs independent tools concurrently)
-            self.messages.append(resp.message)
+            self._append_message(resp.message)
 
             try:
                 if len(resp.tool_calls) == 1:
@@ -129,7 +142,7 @@ class Agent:
                     if result is None:
                         result = self._exec_tool(tc)
                         self._post_hooks(tc, result)
-                    self.messages.append({
+                    self._append_message({
                         "role": "tool",
                         "tool_call_id": tc.id,
                         "content": result,
@@ -137,22 +150,43 @@ class Agent:
                 else:
                     # parallel execution for multiple tool calls
                     results = self._exec_tools_parallel(resp.tool_calls, on_tool)
+                    # All tools already ran: preserve every result even when an
+                    # archive write fails while ingesting an earlier result.
+                    ingestion_error = None
                     for tc, result in zip(resp.tool_calls, results):
-                        self.messages.append({
+                        message = {
                             "role": "tool",
                             "tool_call_id": tc.id,
                             "content": result,
-                        })
+                        }
+                        if ingestion_error is not None:
+                            self.messages.append(message)
+                        else:
+                            try:
+                                self._append_message(message)
+                            except Exception as error:  # noqa: BLE001 -- preserve all already-executed results
+                                ingestion_error = error
+                    if ingestion_error is not None:
+                        raise ingestion_error
             except KeyboardInterrupt:
                 # Ctrl+C mid-execution would leave the assistant tool_calls
                 # message without replies, poisoning the next request; backfill
                 self._answer_pending_tool_calls(resp.tool_calls)
                 raise
 
-            # compress if tool outputs are big
-            self.context.maybe_compress(self.messages, self.llm)
-
         return "(reached maximum tool-call rounds)"
+
+    def _append_message(self, message):
+        self.messages.append(message)
+        return self.context.receive(self.messages)
+
+    def prepare_context(self, *, force=False, reactive=False):
+        extra = getattr(self.llm, "extra", {})
+        output_tokens = extra.get("max_completion_tokens", extra.get("max_tokens", 4096)) or 4096
+        return self.context.prepare(
+            self.messages, self.llm, system=self._full_messages()[:1],
+            tools=self._tool_schemas(), output_tokens=output_tokens, force=force, reactive=reactive,
+        )
 
     def _pre_hooks(self, tc) -> str | None:
         """PreToolUse hooks, fired before consent. A string return blocks the
@@ -344,6 +378,7 @@ class Agent:
     def reset(self):
         """Clear conversation history."""
         self.messages.clear()
+        self.context.reset()
         # a user-visible reset must not leak the dead conversation's checklist
         # into the next system prompt
         todo = self._tool_by_name.get("todo_write")

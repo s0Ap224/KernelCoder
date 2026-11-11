@@ -1,154 +1,40 @@
-# 用有限的窗口，扛住一个长任务
+# 04：可恢复的四层上下文压缩
 
-agent 有一个绕不过去的物理约束：上下文窗口就那么大。
+KernelCoder 在每次模型请求前整理上下文。`context.py` 管理消息与预算，`transcripts.py` 保存被省略的原文，`read_transcript` 提供限定在当前 Agent 内的分页回读。
 
-而编码任务偏偏极其能产 token。模型读一个一千行的文件，那一千行连同行号全进了历史；跑一次测试，几百行输出全进了历史；grep 一下，几十个匹配全进了历史。一个稍微像样的任务转上十几轮，几万 token 就没了。窗口一旦塞满，要么 API 报错，要么你得砍历史，而砍历史砍不好，agent 就会「忘事」，前面读过的文件转头又读一遍，刚做过的决定又推翻重来。
+## 四层管线
 
-所以怎么在有限窗口里装下一个长任务，是 agent 工程里最硬核的子问题之一。这一篇看 `kernelcoder/context.py`（221 行）怎么解。
+| 层 | 触发 | 行为 |
+| --- | --- | --- |
+| tool_budget_constraint | 最新工具批次正文超过 100,000 字符 | 从最大的结果开始，将超过 20,000 字符的单条结果转存，保留前 2,000 字符和引用 |
+| snip_compact | 历史超过 40 条 | 保留第 1、2、11、20 条和最后 15 条，再保护当前请求、未读结果和完整工具批次；其余消息归档并用一条标记替代 |
+| micro_compact | 估算请求超过可用预算 | 保护最近五条工具结果和未读批次，按时间缩短更早的工具结果为前 150 字符和引用，目标为可用预算的 80% |
+| compact_history | 前面的处理未达到目标，或手动 /compact | 保存完整快照；先 fit_tool_results，将大结果依次缩成 2,000、150 字符预览或纯引用，仍不够时才调用摘要模型 |
 
-## 分层，从轻到重
+100,000 是第一层的触发门槛，并非批次最终大小保证。20 条也是软目标：完整工具批次和受保护的当前输入可以使保留数量超过 20。每次只提交有收益的裁剪。
 
-Claude Code 的策略公开拆解里是四层，从最廉价的处理逐级升到最激进的。KernelCoder 蒸馏成三层，思路一致：能用便宜手段省出来的空间，绝不动用贵手段。三层分别在窗口用到一定比例时才触发：
+## 当前请求与工具批次
 
-```python
-self._snip_at = int(max_tokens * 0.50)      # 50% -> 截断臃肿的工具输出
-self._summarize_at = int(max_tokens * 0.70)  # 70% -> LLM 摘要旧对话
-self._collapse_at = int(max_tokens * 0.90)   # 90% -> 硬折叠，最后手段
-```
+KernelCoder 使用 OpenAI 格式：`assistant.tool_calls` 后面是按 `tool_call_id` 匹配的多条 `role=tool` 结果。一个完整批次不能被抽样或切点拆开。普通 user 消息可以独立保留，不要求所有切点都落在 assistant。
 
-`maybe_compress` 是调度者，它先估算当前用了多少 token，然后从轻到重地按需施加每一层，每施加一层就重新估一次，够了就停：
+每条消息接收时检查前两层；尚未闭合的工具批次只能缩短结果正文，不能删除历史。主模型请求前严格校验全部调用均有且只有一个匹配结果。工具执行中断时先补齐占位回复。
 
-```python
-def maybe_compress(self, messages, llm=None) -> bool:
-    current = estimate_tokens(messages)
-    compressed = False
+当前用户请求通过独立元数据定位，原文在有效消息中只保留一份。未读工具批次不进入历史摘要；只有主模型请求成功后才标记已读，摘要请求不改变这一状态。摘要消息是参考资料，不能覆盖系统规则；压缩不会制造一条虚假的 assistant 确认回复。
 
-    if current > self._snip_at:
-        if self._snip_tool_outputs(messages):
-            compressed = True
-            current = estimate_tokens(messages)
+## 请求预算和失败处理
 
-    if current > self._summarize_at and len(messages) > 10:
-        if self._summarize_old(messages, llm, keep_recent=8):
-            compressed = True
-            current = estimate_tokens(messages)
+`max_context_tokens` 默认 128,000。可用历史预算会扣除系统提示、当前 Todo／模式提示、工具 schema、输出额度及窗口 5% 的安全余量。用户请求、工具参数、预览和标记均参与估算，不能因为受到保护就免于计数。
 
-    if current > self._collapse_at and len(messages) > 4:
-        self._hard_collapse(messages, llm)
-        compressed = True
+摘要使用 `prompt.py` 中的 `COMPACT_PROMPT`，只整理目标、文件、决定、剩余工作、用户约束和实际验证状态。摘要输入有独立预算；长历史保留已有摘要及首尾材料，优先近期材料。单次摘要输出最多 2,000 token，小窗口会进一步降低上限，不修改共享模型配置。
 
-    return compressed
-```
+写盘成功后才替换正文。摘要为空、失败或没有缩小上下文时，不替换原历史。没有足够可压缩内容时抛出 `ContextLimitError` 并保留当前请求。明确的 API 上下文超限允许一次应急压缩后重试模型请求，不重跑已经完成的工具；其他错误直接交给既有处理。
 
-上一篇和上上篇里那两处 `self.context.maybe_compress(...)`，调的就是这里。它在每次发请求前、每轮工具执行后都喊一声，但绝大多数时候窗口没满，这函数什么都不做就返回了。压缩是惰性的，只在真要撞墙时才花力气。
+## 归档、回读和恢复
 
-至于 token 怎么估的，`estimate_tokens` 用了一个糙到可爱的办法：字符数除以 3。
+归档默认位于 `~/.kernelcoder/transcripts/<conversation_id>/<agent_id>/`，不写入项目工作树。每个不可变记录有唯一 ID，并标注省略阶段、消息或调用 ID、原文引用及大小。跨阶段再次裁剪时仍指向原始结果。归档只能保存工具实际交给 Agent 的内容，工具自身提前截断的内容无法由这一层恢复。
 
-```python
-def _approx_tokens(text: str) -> int:
-    """Rough token count, roughly 3 chars per token for mixed en/zh content."""
-    return len(text) // 3
-```
+`read_transcript(artifact_id, offset=0, limit=2000)` 按字符分页，正文每页最多 10,000 字符。它只读取当前 Agent 命名空间中的 ID，不接受任意路径；在本地和沙箱模式下都通过这个专用只读入口访问。返回的内容继续作为工具资料，接受同样的预算检查。
 
-它不准，真要准得上 tokenizer。但压缩判断要的不是精确值，是「现在大概到几成了」这个量级感，除以 3 对中英混合内容够用了，而且零依赖、零开销。在「够用就好」和「精确但重」之间，这里明确选了前者。什么地方该糙、什么地方该较真，是工程品味的一部分。
+`/save` 保存归档命名空间、当前请求定位和结果读取状态；`--resume` 恢复这些状态。旧会话仍可读取，其中的工具结果保守地视为未读。`/reset` 创建新命名空间但不删除旧归档。子 Agent 可共享 conversation ID，但拥有独立 agent ID 和绑定到自身的回读工具。
 
-## 第一层：旧的工具输出，是有保质期的
-
-第一层 `_snip_tool_outputs` 是最便宜的，不调模型，纯文本处理。它把超过 1500 字符的工具结果，截成只留头三行和尾三行：
-
-```python
-content = m.get("content", "")
-if len(content) <= 1500:
-    continue
-lines = content.splitlines()
-if len(lines) <= 6:
-    continue
-snipped = (
-    "\n".join(lines[:3])
-    + f"\n... ({len(lines)} lines, snipped to save context) ...\n"
-    + "\n".join(lines[-3:])
-)
-m["content"] = snipped
-```
-
-这一层背后有个我觉得很漂亮的洞察：工具输出是有保质期的。
-
-二十轮之前那次 grep 吐出来的两百行匹配，在当时很有用，模型靠它定位了代码。但到了现在，模型早就用完那个结果、做完了相应的修改，那两百行就成了纯粹的占位垃圾，留着它只是白占窗口。把它截成头尾几行，既保留了「这里曾经查过一次、大致是这些文件」的线索，又把绝大部分死重量扔掉了。新鲜的信息值钱，陈旧的信息廉价，压缩就该优先压陈旧的。公开拆解里管这层叫 HISTORY_SNIP，干的是同一件事。
-
-为什么截头尾而不是只截开头？因为命令输出最有用的信息常常在两端：开头是它在干什么，结尾是结果和报错。中间那一大坨过程往往可以丢。这个「留头尾、弃中间」的选择，和上一篇 bash 输出截断的逻辑是一脉相承的。
-
-## 第二层：让模型给旧对话写个摘要
-
-第一层只压工具输出，压不动对话本身。当窗口涨到 70%，第二层 `_summarize_old` 上场：把旧的对话整段交给模型写一个摘要，只留最近 8 条消息原样不动。
-
-```python
-split = self._safe_split(messages, keep_recent)
-old = messages[:split]
-tail = messages[split:]
-
-summary = self._get_summary(old, llm)
-
-messages.clear()
-messages.append({
-    "role": "user",
-    "content": f"[Context compressed - conversation summary]\n{summary}",
-})
-messages.append({
-    "role": "assistant",
-    "content": "Got it, I have the context from our earlier conversation.",
-})
-messages.extend(tail)
-```
-
-旧对话被替换成一条「这是之前对话的摘要」的 user 消息，外加一条模型「我记下了」的 assistant 回应，然后接上原封不动的近期消息。摘要本身由 `_get_summary` 生成，它给模型的指令很聚焦：保留改过的文件路径、做过的关键决定、遇到的错误、当前任务状态；丢掉啰嗦的命令输出、代码清单、来回的废话。这正是一个长任务里真正需要被记住的东西。
-
-如果没有可用的模型（或者摘要调用本身失败了），它退化成 `_extract_key_info`，用正则把文件路径和带 error 的行抽出来拼一个粗摘要。又是优雅降级：宁可给个糙摘要，也不让压缩这一步把整个会话拖垮。
-
-## 那个一定会咬你的坑：孤儿 tool 消息
-
-现在讲这一篇的重头戏，也是我在打磨这个项目时实打实踩过的坑。
-
-回想第一篇那条铁律：一条带 `tool_calls` 的 assistant 消息，后面必须跟着配对的 `tool` 回复，少一个 API 都会拒。压缩这件事的本质，是在历史的某个位置切一刀，前面的压掉、后面的留下。问题来了：如果这一刀正好切在一组工具调用的中间呢？
-
-设想历史是这样一段：assistant 发起了工具调用、紧跟着是对应的 tool 回复。如果「保留最近 N 条」这个边界恰好落在 tool 回复上，那么被保留的尾巴就会以一条 tool 消息开头，而产生它的那条 assistant 消息被切到前面、压进摘要里没了。这条 tool 回复成了孤儿，它前面找不到对应的 tool_calls。下一次请求带着这个孤儿发出去，API 当场拒绝。你的压缩逻辑本来是来救场的，结果亲手把会话搞死了。
-
-`_safe_split` 就是来防这个的。它在切分前，把边界往前挪，直到边界那条消息不再是 tool：
-
-```python
-@staticmethod
-def _safe_split(messages: list[dict], keep_recent: int) -> int:
-    """Index where the kept tail should start.
-
-    Walk the boundary back so a 'tool' result is never separated from the
-    assistant message whose tool_calls produced it - an orphaned tool
-    message has no preceding tool_calls and OpenAI-compatible APIs reject it.
-    """
-    split = max(0, len(messages) - keep_recent)
-    while split > 0 and messages[split].get("role") == "tool":
-        split -= 1
-    return split
-```
-
-就这么一个 `while` 循环往回退。逻辑短得不能再短，但少了它，压缩就是个定时炸弹，平时不响，偏在长对话、窗口吃紧、最不该出事的时候炸。第二层和第三层切分时都走 `_safe_split`，不直接用 `len - keep_recent`。
-
-这个坑值得你记住，因为它有一切「隐蔽 bug」的特征：它依赖一个跨越多条消息的不变式（tool 必须紧跟 tool_calls），这个不变式没写在任何一处显眼的地方，平时也不触发，只在「切分点恰好落在工具调用中间」这个特定时机才暴露。这种 bug 你很难靠盯着单个函数看出来，得在脑子里同时装着「压缩逻辑」和「API 的配对约束」两件事，才能意识到它们会在某个角落打架。KernelCoder 用两个测试把这个不变式钉死了，`test_safe_split_never_orphans_a_tool_message` 验切分点不落在 tool 上，`test_compress_never_leaves_an_orphan_tool_reply` 验整轮压缩后每条 tool 回复都还紧跟着它的 tool_calls。写这种测试，本质上是把一条「藏在脑子里的不变式」固化成代码，让它以后别再被人不小心破坏。
-
-## 第三层：最后手段
-
-窗口涨到 90%，说明前两层都没压够，第三层 `_hard_collapse` 是急刹车，只保留最后几条消息加一个摘要，其余全部折叠掉。它同样走 `_safe_split` 保证不留孤儿。这层很少触发，它存在的意义是「万一前两层都不够，至少别让 agent 直接撞墙死掉」，宁可丢掉较多上下文，也要让会话活下去。
-
-## 和 Claude Code 的对照
-
-四层和三层的差别，主要在 Claude Code 多了一层带缓存的微压缩（microcompact）和周期性的后台自动压缩，工程上更精细。但「分层、从轻到重、惰性触发、优先压陈旧信息」这套核心思路，两者完全一致。KernelCoder 把它压成三层，刚好够你看清每一层在解决什么、代价是什么，而不至于淹没在缓存和调度的细节里。
-
-这一篇其实也回答了一个开头的问题：为什么 agent 偶尔会「忘事」。因为它真的会忘，压缩就是有损的，被摘要掉的细节就是丢了。好的压缩策略不是不丢，而是丢得聪明，优先丢那些已经没有保质期的东西。
-
-## 这一篇带走什么
-
-- 上下文窗口是 agent 最硬的物理约束，编码任务又极其能产 token，撞墙是迟早的事。
-- 压缩要分层、从轻到重、惰性触发：能用纯文本截断省出来的，就别动用 LLM 摘要。
-- 工具输出有保质期，陈旧的输出是优先压缩对象。新鲜信息值钱，陈旧信息廉价。
-- 孤儿 tool 消息是个典型的隐蔽 bug：它依赖一条跨消息的不变式，平时不发作，只在切分点落在工具调用中间时炸。把这种不变式写成测试钉死，是对抗这类 bug 的正道。
-- 压缩是有损的，agent「忘事」是它的固有代价。好策略不是不丢，是丢得聪明。
-
-下一篇，我们回到第一篇里被跳过的另一处：当模型一次返回好几个工具调用，怎么并发地跑，以及它什么时候能开一个子 agent 替自己分担。
+行为测试见 `tests/test_context.py`，覆盖字符与条数边界、工具配对、摘要保护与失败、回读隔离、会话恢复以及一次超限重试。

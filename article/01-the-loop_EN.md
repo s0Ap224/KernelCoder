@@ -13,25 +13,28 @@ Open `agent.py`. The core is the `Agent.chat()` method. I'll paste it verbatim, 
 ```python
 def chat(self, user_input: str, on_token=None, on_tool=None) -> str:
     """Process one user message. May involve multiple LLM/tool rounds."""
-    self.messages.append({"role": "user", "content": user_input})
-    self.context.maybe_compress(self.messages, self.llm)
+    message = {"role": "user", "content": user_input}
+    self.context.begin_turn(message)
+    self._append_message(message)
 
     for _ in range(self.max_rounds):
+        self.prepare_context()
         resp = self.llm.chat(
             messages=self._full_messages(),
             tools=self._tool_schemas(),
             on_token=on_token,
         )
 
+        self.context.mark_seen(self.messages)
+
         # no tool calls -> LLM is done, return text
         if not resp.tool_calls:
-            self.messages.append(resp.message)
+            self._append_message(resp.message)
             return resp.content
 
         # tool calls -> execute
-        self.messages.append(resp.message)
+        self._append_message(resp.message)
         # ...execute tools, append results back to self.messages...
-        self.context.maybe_compress(self.messages, self.llm)
 
     return "(reached maximum tool-call rounds)"
 ```

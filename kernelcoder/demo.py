@@ -36,7 +36,7 @@ class ScriptedLLM:
         self._turns = list(script)
         self.model = model
 
-    def chat(self, messages, tools=None, on_token=None, on_reasoning=None) -> LLMResponse:
+    def chat(self, messages, tools=None, on_token=None, on_reasoning=None, max_tokens=None) -> LLMResponse:
         if not self._turns:
             raise RuntimeError("ScriptedLLM ran out of turns")
         resp = self._turns.pop(0)

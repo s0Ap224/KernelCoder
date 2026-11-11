@@ -117,7 +117,7 @@ def test_cli_local_is_lazy_and_saved_without_e2b(task, monkeypatch, capsys):
     monkeypatch.setattr("kernelcoder.session.SESSIONS_DIR", task.directory.parent / "chats")
     monkeypatch.setattr(cli.Config, "from_env", lambda: SimpleNamespace(
         model="test", api_key="test", base_url=None, provider="openai", temperature=0,
-        max_tokens=100, max_context_tokens=1000))
+        max_tokens=100, max_context_tokens=128_000))
     monkeypatch.setattr(cli, "LLM", lambda **kw: ScriptedLLM([LLMResponse(content="ready")]))
     monkeypatch.setattr("sys.argv", ["kernelcoder", "--sandbox-session", task.id,
                                    "--sandbox-store", str(task.directory.parent),

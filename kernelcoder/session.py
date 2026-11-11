@@ -38,7 +38,8 @@ def _session_path(session_id: str) -> Path:
     return path
 
 
-def save_session(messages: list[dict], model: str, session_id: str | None = None, sandbox_id=None) -> str:
+def save_session(messages: list[dict], model: str, session_id: str | None = None, sandbox_id=None,
+                 context_state=None) -> str:
     """Save conversation to disk. Returns the session ID."""
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -50,6 +51,7 @@ def save_session(messages: list[dict], model: str, session_id: str | None = None
         "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "messages": messages,
         "sandbox_id": sandbox_id,
+        "context": context_state,
     }
 
     path = _session_path(session_id)
@@ -60,6 +62,12 @@ def save_session(messages: list[dict], model: str, session_id: str | None = None
 def session_sandbox_id(session_id):
     path = _session_path(session_id)
     return json.loads(path.read_text(encoding="utf-8")).get("sandbox_id") if path.exists() else None
+
+
+def load_context_state(session_id):
+    """Optional extension; legacy session loading still returns (messages, model)."""
+    path = _session_path(session_id)
+    return json.loads(path.read_text(encoding="utf-8")).get("context") if path.exists() else None
 
 
 def load_session(session_id: str) -> tuple[list[dict], str] | None:

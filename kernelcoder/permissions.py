@@ -24,7 +24,7 @@ class Permission:
     """Session-scoped consent state. No prompts itself: the CLI hands in
     `ask`, and the only I/O is the optional always-allow store."""
 
-    READ_ONLY = frozenset({"read_file", "glob", "grep", "todo_write", "load_skill"})
+    READ_ONLY = frozenset({"read_file", "glob", "grep", "todo_write", "load_skill", "read_transcript"})
     # Consent-free does not mean thread-safe: todo_write replaces shared state.
     # The scheduler also checks the registered implementation, not just its name.
     PARALLEL_READ_ONLY = frozenset({"read_file", "glob", "grep", "load_skill"})

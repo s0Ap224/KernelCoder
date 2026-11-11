@@ -21,7 +21,7 @@ from .mcp import load_mcp_tools
 from .mcp_local import MCPManager
 from .permissions import DEFAULT_STORE, Permission
 from .sandbox import SandboxRunner
-from .session import list_sessions, load_session, save_session, session_sandbox_id
+from .session import list_sessions, load_context_state, load_session, save_session, session_sandbox_id
 from .skills import SkillLoader, SkillTool
 from .tools import ALL_TOOLS
 from .tools.bash import BashTool
@@ -228,6 +228,7 @@ def _main(args):
         loaded = load_session(args.resume)
         if loaded:
             agent.messages, loaded_model = loaded
+            agent.context.restore_state(agent.messages, load_context_state(args.resume))
             # restore the model from the saved session unless overridden by CLI
             if not args.model:
                 agent.llm.model = loaded_model
@@ -278,7 +279,8 @@ def _finish_sandbox(agent, config, store):
         console.print(agent._tool_by_name['bash'].runner.close(workspace), markup=False)
     except WorkspaceError as e:
         console.print(f"Sandbox cleanup required: {e}", markup=False)
-    sid = save_session(agent.messages, config.model, sandbox_id=workspace.id)
+    sid = save_session(agent.messages, config.model, sandbox_id=workspace.id,
+                       context_state=agent.context.export_state(agent.messages))
     console.print(f"Conversation saved: {sid}; sandbox: {workspace.id}", markup=False)
     if workspace.meta["state"] == "open":
         try:
@@ -450,15 +452,23 @@ def _repl(agent: Agent, config: Config):
         if user_input == "/compact":
             from .context import estimate_tokens
             before = estimate_tokens(agent.messages)
-            compressed = agent.context.maybe_compress(agent.messages, agent.llm)
+            try:
+                report = agent.prepare_context(force=True)
+            except (ValueError, OSError) as error:
+                console.print(f"Context: {error}", markup=False)
+                continue
+            compressed = report.changed
             after = estimate_tokens(agent.messages)
             if compressed:
                 console.print(f"[green]Compressed: {before} → {after} tokens ({len(agent.messages)} messages)[/green]")
             else:
                 console.print(f"[dim]Nothing to compress ({before} tokens, {len(agent.messages)} messages)[/dim]")
+            if report.error:
+                console.print(f"Context: {report.error}", markup=False)
             continue
         if user_input == "/save":
-            sid = save_session(agent.messages, config.model, sandbox_id=agent.workspace.id if agent.workspace else None)
+            sid = save_session(agent.messages, config.model, sandbox_id=agent.workspace.id if agent.workspace else None,
+                               context_state=agent.context.export_state(agent.messages))
             console.print(f"[green]Session saved: {sid}[/green]")
             console.print(f"Resume with: kernelcoder -r {sid}")
             continue

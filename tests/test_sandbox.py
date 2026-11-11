@@ -96,7 +96,7 @@ def test_unsafe_cannot_resume_a_sandbox_conversation(ws, monkeypatch):
     monkeypatch.setattr(cli, "session_sandbox_id", lambda sid: ws.id)
     monkeypatch.setattr(cli.Config, "from_env", lambda: SimpleNamespace(
         model="test", api_key="test", base_url=None, provider="openai", temperature=0,
-        max_tokens=100, max_context_tokens=1000))
+        max_tokens=100, max_context_tokens=128_000))
     monkeypatch.setattr(cli, "LLM", lambda **kw: ScriptedLLM([]))
     with pytest.raises(SystemExit) as exc:
         cli.main()
@@ -328,7 +328,7 @@ def test_cli_yes_leaves_original_and_persists_copy(ws, monkeypatch):
                                      "--sandbox-session", ws.id, "--sandbox-store", str(ws.directory.parent)])
     monkeypatch.setattr(cli.Config, "from_env", lambda: SimpleNamespace(
         model="test", api_key="test", base_url=None, provider="openai", temperature=0,
-        max_tokens=100, max_context_tokens=1000))
+        max_tokens=100, max_context_tokens=128_000))
     monkeypatch.setattr(cli, "LLM", lambda **kw: ScriptedLLM([
         LLMResponse(tool_calls=[ToolCall(id="1", name="write_file", arguments={"file_path": "code.py", "content": "new"})]),
         LLMResponse(content="done")]))

@@ -150,6 +150,7 @@ class LLM:
         tools: list[dict] | None = None,
         on_token=None,
         on_reasoning=None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         """Send messages, stream back response, handle tool calls.
 
@@ -166,6 +167,9 @@ class LLM:
         }
         if tools:
             params["tools"] = tools
+        if max_tokens is not None:
+            params.pop("max_completion_tokens", None)
+            params["max_tokens"] = max_tokens
 
         # Provider-dialect fallbacks. A 400 that quotes a parameter is adapted
         # (newer OpenAI models take max_completion_tokens, default temperature
@@ -183,6 +187,9 @@ class LLM:
                     stream = self._call_with_retry(params) #服务端
                     break
                 except BadRequestError as e: #客户端
+                    from .context import is_context_overflow
+                    if is_context_overflow(e):
+                        raise
                     if _adapt_rejected_param(params, e): #改一下新旧参数名
                         continue
                     if "stream_options" not in params: #"stream_options"是Open AI的扩展，部分provider不认

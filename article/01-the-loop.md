@@ -2,36 +2,39 @@
 
 如果只能用一句话解释编码 agent，我会这么说：它是一个循环，反复地问模型「下一步干什么」，照着模型说的去动手，把结果再讲给模型听，直到模型说「不用动手了，我有答案了」。
 
-听起来朴素到有点失望。但这就是真相。Claude Code 把这件事做到了几十万行，可那个最中心的东西，公开拆解里叫 `query.ts`，它的主体是一个一千七百行上下的 `while` 循环。KernelCoder 把同一个循环写在 `kernelcoder/agent.py`（351 行，连空行带注释）里。两者形状一模一样，区别只是后者你能一眼看完。
+听起来朴素到有点失望。但这就是真相。Claude Code 把这件事做到了几十万行，可那个最中心的东西，公开拆解里叫 `query.ts`，它的主体是一个一千七百行上下的 `while` 循环。KernelCoder 把同一个循环写在 `kernelcoder/agent.py`（386 行，连空行带注释）里。两者形状一模一样，区别只是后者你能一眼看完。
 
 这一篇，我们就把这个循环逐段读透。
 
 ## 先看骨架
 
-打开 `agent.py`，核心是 `Agent.chat()` 这个方法。我把它原样贴出来，然后一段段拆：
+打开 `agent.py`，核心是 `Agent.chat()` 这个方法。下面省略重试与批次回填细节，展示主要流程：
 
 ```python
 def chat(self, user_input: str, on_token=None, on_tool=None) -> str:
     """Process one user message. May involve multiple LLM/tool rounds."""
-    self.messages.append({"role": "user", "content": user_input})
-    self.context.maybe_compress(self.messages, self.llm)
+    message = {"role": "user", "content": user_input}
+    self.context.begin_turn(message)
+    self._append_message(message)
 
     for _ in range(self.max_rounds):
+        self.prepare_context()
         resp = self.llm.chat(
             messages=self._full_messages(),
             tools=self._tool_schemas(),
             on_token=on_token,
         )
 
+        self.context.mark_seen(self.messages)
+
         # no tool calls -> LLM is done, return text
         if not resp.tool_calls:
-            self.messages.append(resp.message)
+            self._append_message(resp.message)
             return resp.content
 
         # tool calls -> execute
-        self.messages.append(resp.message)
+        self._append_message(resp.message)
         # ...执行工具，把结果 append 回 self.messages...
-        self.context.maybe_compress(self.messages, self.llm)
 
     return "(reached maximum tool-call rounds)"
 ```

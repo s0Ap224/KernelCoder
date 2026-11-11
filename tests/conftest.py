@@ -2,7 +2,7 @@
 
 import pytest
 
-from kernelcoder import Config, checkpoints, cli, onboarding
+from kernelcoder import Config, checkpoints, cli, onboarding, transcripts
 from kernelcoder import config as config_module
 from kernelcoder import llm as llm_module
 from kernelcoder.tools import ALL_TOOLS
@@ -25,6 +25,11 @@ def _checkpoints_isolated(tmp_path, monkeypatch):
 def _pricing_isolated(tmp_path, monkeypatch):
     """Cost estimates must never read the real ~/.kernelcoder/pricing.json."""
     monkeypatch.setattr(llm_module, "PRICING_FILE", tmp_path / "pricing.json")
+
+
+@pytest.fixture(autouse=True)
+def _transcripts_isolated(tmp_path, monkeypatch):
+    monkeypatch.setattr(transcripts, "TRANSCRIPTS_DIR", tmp_path / "transcripts")
 
 
 @pytest.fixture(autouse=True)

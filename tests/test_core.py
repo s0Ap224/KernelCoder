@@ -12,7 +12,7 @@ from openai import BadRequestError
 
 from kernelcoder import ALL_TOOLS, LLM, Agent, Config, __version__
 from kernelcoder import session as session_module
-from kernelcoder.context import ContextManager, estimate_tokens
+from kernelcoder.context import estimate_tokens
 from kernelcoder.session import list_sessions, load_session, save_session
 from tests.conftest import get_tool
 
@@ -116,57 +116,7 @@ def test_estimate_tokens_tiered_by_content():
     assert _approx_tokens(cjk) > 150
 
 
-def test_context_snip():
-    ctx = ContextManager(max_tokens=3000)
-    msgs = [
-        {"role": "tool", "tool_call_id": "t1", "content": "x\n" * 1000},
-    ]
-    before = estimate_tokens(msgs)
-    ctx._snip_tool_outputs(msgs)
-    after = estimate_tokens(msgs)
-    assert after < before
-
-
-def test_context_compress():
-    ctx = ContextManager(max_tokens=2000)
-    msgs = []
-    for i in range(20):
-        msgs.append({"role": "user", "content": f"msg {i} " + "a" * 200})
-        msgs.append({"role": "tool", "tool_call_id": f"t{i}", "content": "b" * 2000})
-    before = estimate_tokens(msgs)
-    ctx.maybe_compress(msgs, None)
-    after = estimate_tokens(msgs)
-    assert after < before
-    assert len(msgs) < 40  # should be compressed
-
-
-def test_safe_split_never_orphans_a_tool_message():
-    """The kept tail must not begin with a 'tool' message - it would be severed
-    from the assistant tool_calls that produced it, which the API rejects."""
-    ctx = ContextManager(max_tokens=1000)
-    messages = [
-        {"role": "user", "content": "do it"},
-        {"role": "assistant", "content": None, "tool_calls": [{"id": "c1"}]},
-        {"role": "tool", "tool_call_id": "c1", "content": "result"},
-        {"role": "tool", "tool_call_id": "c2", "content": "result2"},
-    ]
-    split = ctx._safe_split(messages, keep_recent=1)
-    assert messages[split].get("role") != "tool"
-
-
-def test_compress_never_leaves_an_orphan_tool_reply():
-    """After summarisation every tool reply must still follow its tool_calls."""
-    ctx = ContextManager(max_tokens=2000)
-    msgs = []
-    for i in range(20):
-        msgs.append({"role": "user", "content": f"msg {i} " + "a" * 200})
-        msgs.append({"role": "assistant", "content": None, "tool_calls": [{"id": f"c{i}"}]})
-        msgs.append({"role": "tool", "tool_call_id": f"c{i}", "content": "b" * 800})
-    ctx.maybe_compress(msgs, None)
-    for i, m in enumerate(msgs):
-        if m.get("role") == "tool":
-            prev = msgs[i - 1]
-            assert prev.get("role") == "tool" or prev.get("tool_calls"), f"orphan tool at {i}"
+# Four-stage compaction and pairing regressions live in test_context.py.
 
 
 # --- Session ---
@@ -390,7 +340,7 @@ def test_agent_tool_scope_is_per_instance():
     """An Agent restricted to a subset of tools must not resolve tools outside it."""
     only_read = [get_tool("read_file")]
     agent = Agent(llm=LLM.__new__(LLM), tools=only_read)
-    assert set(agent._tool_by_name) == {"read_file"}
+    assert set(agent._tool_by_name) == {"read_file", "read_transcript"}
 
     class _TC:
         name = "bash"  # a real, registered tool - but not in this agent's set

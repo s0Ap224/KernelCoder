@@ -1,4 +1,9 @@
-"""Layered configuration without exporting credentials to child processes."""
+"""Layered configuration without exporting credentials to child processes.
+模型连接与核心参数（Model Settings）
+外部工具与执行环境（Tooling & Sandbox）
+分层加载与作用域（Layered Configuration）
+ 本地持久化与行为偏好（Settings）
+"""
 
 import json
 import os
