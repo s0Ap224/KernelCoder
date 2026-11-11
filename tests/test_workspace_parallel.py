@@ -38,6 +38,7 @@ def call(i, name='read_file', **arguments):
 
 
 def make_agent(ws, tools=None, **kwargs):
+    kwargs.setdefault("permission", Permission(allow_all=True, project_root=ws.original))
     return Agent(ScriptedLLM([]), tools=tools or [ReadFileTool()], workspace=ws, **kwargs)
 
 
@@ -172,7 +173,7 @@ def test_todo_is_consent_free_but_serial_and_custom_read_is_serial(ws):
             return file_path
 
     todo = TodoWriteTool()
-    agent = make_agent(ws, [CustomRead(), todo], permission=Permission())
+    agent = make_agent(ws, [CustomRead(), todo], permission=Permission(ask=lambda *_: "once"))
     assert 'todo_write' in Permission.READ_ONLY
     assert 'todo_write' not in Permission.PARALLEL_READ_ONLY
     assert not agent._parallel_read(call(1))
@@ -238,7 +239,7 @@ def test_consent_and_notifications_stay_on_main_thread(ws, monkeypatch):
     original = ReadFileTool.execute
 
     class Policy(Permission):
-        def check(self, name, arguments):
+        def authorize(self, tool, arguments, *, context=None):
             assert threading.get_ident() == main_thread
             events.append('permission')
             return 'denied' if arguments.get('file_path') == 'denied' else None

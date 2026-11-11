@@ -4,8 +4,8 @@ Runs one scripted task through the real Agent loop with a ScriptedLLM, so the
 thought -> tool call -> observation cycle renders exactly as it would against
 a live model. Useful for demos, screenshots, and as a smoke test of the loop.
 """
-
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -16,6 +16,7 @@ from rich.panel import Panel
 from .agent import Agent
 from .cli import _brief
 from .llm import LLMResponse, ToolCall
+from .permissions import Permission
 
 console = Console()
 
@@ -51,7 +52,7 @@ _TASK = (
 )
 
 
-def _script(workdir: Path) -> list[LLMResponse]:
+def _script(workdir: Path, python="python") -> list[LLMResponse]:
     fib_py = (
         "def fib(n):\n"
         "    if n < 2:\n"
@@ -80,7 +81,7 @@ def _script(workdir: Path) -> list[LLMResponse]:
         ),
         LLMResponse(
             content="Running the tests.",
-            tool_calls=[ToolCall(id="c3", name="bash", arguments={"command": f'cd "{workdir}" && python -m pytest test_fib.py -q'})],
+            tool_calls=[ToolCall(id="c3", name="bash", arguments={"command": f'cd "{workdir.as_posix()}" && "{python}" -m pytest test_fib.py -q'})],
         ),
         LLMResponse(
             content="All three assertions pass. `fib` is iterative, and the test covers the base cases plus fib(10) == 55."
@@ -105,8 +106,10 @@ def run_demo(*, unsafe=False, runner=None, store=None) -> int:
     workspace = None if unsafe else SandboxWorkspace.create(workdir, store)
     tools = [type(t)() for t in ALL_TOOLS if t.name != "bash"]
     tools.insert(0, BashTool(workspace, runner, unsafe=unsafe))
-    agent = Agent(llm=ScriptedLLM(_script(Path("/workspace") if workspace else workdir)),
-                  tools=tools, workspace=workspace)
+    script_root = Path("/workspace") if workspace else workdir
+    python = "python" if workspace else Path(sys.executable).as_posix()
+    agent = Agent(llm=ScriptedLLM(_script(script_root, python)), tools=tools, workspace=workspace,
+                  permission=Permission(ask=lambda *_: "once"))
 
     if workspace:
         # Keep the demo's dependency setup explicit, just like a normal agent.

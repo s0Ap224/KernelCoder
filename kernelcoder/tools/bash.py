@@ -1,14 +1,4 @@
-"""Bash tool facade: fail closed until E2B is connected; host shell is opt-in.
-
-Claude Code's BashTool is 1,143 lines. This is the distilled version:
-- Output capture with truncation (head+tail preserved)
-- Timeout support
-- Dangerous command detection
-- Working directory tracking (cd awareness), only in unsafe mode
-
-Sandbox execution and workspace policy live in sandbox.py and workspace.py.
-The legacy implementation below is retained for --sandbox unsafe and learning.
-"""
+"""Bash facade with prepared execution, bounded output and shared hard checks."""
 
 import os
 import re
@@ -16,8 +6,9 @@ import subprocess
 import threading
 from typing import ClassVar
 
+from ..bash_policy import analyze_command
 from ..sandbox import SandboxRunner
-from ..shell import run_shell
+from ..shell import prepare_shell, run_shell
 from ..workspace import CURRENT_WORKSPACE
 from .base import Tool
 
@@ -39,24 +30,6 @@ def set_tracked_cwd(path: str | None) -> None:
             del _local.cwd
     else:
         _local.cwd = path
-
-# patterns that could wreck the filesystem or leak secrets
-_DANGEROUS_PATTERNS = [
-    # recursive delete aimed at root/home (force flag optional)
-    (r"\brm\s+(-\w*)?-r\w*\s+(/|~|\$HOME)", "recursive delete on home/root"),
-    # recursive (-r/-R) and force (-f) flags together, in any order or spacing
-    (r"\brm\b(?=(?:.*\s)?-\w*[rR])(?=(?:.*\s)?-\w*f)", "force recursive delete"),
-    # the same, written with long-form flags
-    (r"\brm\b.*--recursive\b.*--force\b|\brm\b.*--force\b.*--recursive\b", "force recursive delete"),
-    (r"\bmkfs\b", "format filesystem"),
-    (r"\bdd\s+.*of=/dev/", "raw disk write"),
-    (r">\s*/dev/sd[a-z]", "overwrite block device"),
-    (r"\bchmod\s+(-R\s+)?777\s+/", "chmod 777 on root"),
-    (r":\(\)\s*\{.*:\|:.*\}", "fork bomb"),
-    (r"\bcurl\b.*\|\s*(sudo\s+)?(ba)?sh\b", "pipe curl to shell"),
-    (r"\bwget\b.*\|\s*(sudo\s+)?(ba)?sh\b", "pipe wget to shell"),
-]
-
 
 class BashTool(Tool):
     def __init__(self, workspace=None, runner=None, *, unsafe=False):
@@ -90,7 +63,37 @@ class BashTool(Tool):
         "required": ["command"],
     }
 
+    def prepare(self, arguments):
+        command = arguments.get("command")
+        timeout = arguments.get("timeout", 120)
+        cwd = arguments.get("cwd")
+        if not isinstance(command, str) or not command.strip() or "\0" in command:
+            raise ValueError("Command must be a nonempty string without NUL")
+        if type(timeout) is not int or not 1 <= timeout <= 600:
+            raise ValueError("timeout must be an integer between 1 and 600")
+        if cwd is not None and not isinstance(cwd, str):
+            raise ValueError("cwd must be a string")
+        workspace = CURRENT_WORKSPACE.get() or self.workspace
+        if workspace:
+            directory = workspace.path(cwd or "/workspace")
+            if not directory.is_dir():
+                raise ValueError("cwd must be a directory")
+            cwd = "/workspace" + ("/" + directory.relative_to(workspace.tree).as_posix()
+                                  if directory != workspace.tree else "")
+            prepared = None
+        else:
+            cwd = os.path.abspath(cwd or get_tracked_cwd() or os.getcwd())
+            if not os.path.isdir(cwd):
+                raise ValueError("cwd must be a directory")
+            prepared = prepare_shell(command)
+            command = prepared.command
+        return {"command": command, "timeout": timeout, "cwd": cwd}, prepared
+
     def execute(self, command: str, timeout: int = 120, cwd: str | None = None) -> str:
+        arguments, prepared = self.prepare({"command": command, "timeout": timeout, "cwd": cwd})
+        return self.execute_prepared(**arguments, prepared=prepared)
+
+    def execute_prepared(self, command, timeout=120, cwd=None, *, prepared=None):
         workspace = CURRENT_WORKSPACE.get() or self.workspace
 
         if workspace is not None:
@@ -122,6 +125,7 @@ class BashTool(Tool):
                 errors="replace",
                 timeout=timeout,
                 cwd=cwd,
+                prepared=prepared,
             )
 
             # track cd commands so next command runs in the right place
@@ -149,11 +153,7 @@ class BashTool(Tool):
 
 
 def _check_dangerous(cmd: str) -> str | None:
-    """Return a warning string if the command looks destructive, else None."""
-    for pattern, reason in _DANGEROUS_PATTERNS:
-        if re.search(pattern, cmd):
-            return reason
-    return None
+    return analyze_command(cmd).deny or None
 
 
 def _split_words(statement: str) -> list[str]:

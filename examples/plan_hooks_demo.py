@@ -7,7 +7,6 @@ Seeds a fib.py in a temp dir, then drives the real Agent loop through:
 plan mode ON -> read allowed, edit refused -> plan presented -> approve ->
 edit/write/pytest flowing through with Pre/PostToolUse hooks firing.
 """
-
 import sys
 import tempfile
 from pathlib import Path
@@ -15,6 +14,8 @@ from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+
+from kernelcoder.permissions import Permission as ScriptPermission
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -116,7 +117,7 @@ def run(*, unsafe=False) -> int:
     workdir = Path(tempfile.mkdtemp(prefix="kernelcoder-demo-"))
     (workdir / "fib.py").write_text(FIB_PY, encoding="utf-8")
     tools = [type(t)() for t in ALL_TOOLS if t.name != "bash"]
-    agent = Agent(llm=ScriptedLLM(_script(workdir)), tools=[BashTool(unsafe=True), *tools], hooks=DemoHooks())
+    agent = Agent(llm=ScriptedLLM(_script(workdir)), tools=[BashTool(unsafe=True), *tools], hooks=DemoHooks(), permission=ScriptPermission(ask=lambda *_: "once"))
     agent.plan_mode = True
 
     console.print(Panel.fit(f"[bold]{TASK}[/]", title="kernelcoder demo · plan mode + hooks (offline)"))

@@ -5,7 +5,6 @@ places where two policies meet and the order between them decides what the
 model is told. These combinations are the part of KernelCoder that must never
 be wrong, because it is where readers copy the pattern from.
 """
-
 import sys
 from pathlib import Path
 from typing import ClassVar
@@ -17,6 +16,7 @@ from kernelcoder.demo import ScriptedLLM
 from kernelcoder.hooks import Hooks
 from kernelcoder.llm import LLMResponse, ToolCall
 from kernelcoder.permissions import Permission
+from kernelcoder.permissions import Permission as ScriptPermission
 from kernelcoder.tools.base import Tool
 from kernelcoder.tools.grep import GrepTool
 from kernelcoder.tools.write import WriteFileTool
@@ -58,7 +58,7 @@ def test_pre_hook_fires_before_plan_mode_and_its_reason_wins(tmp_path):
             LLMResponse(content="noted"),
         ]),
         tools=[WriteFileTool()],
-        permission=Permission(allow_all=True),
+        permission=Permission(allow_all=True, project_root=tmp_path),
         hooks=Hooks(pre=[_blocking_hook()], post=[]),
     )
     agent.plan_mode = True
@@ -98,7 +98,7 @@ def test_a_hook_can_veto_a_read_only_tool(tmp_path):
             LLMResponse(content="noted"),
         ]),
         tools=[GrepTool()],
-        permission=Permission(allow_all=True),
+        permission=Permission(allow_all=True, project_root=tmp_path),
         hooks=Hooks(pre=[_blocking_hook("no grep today")], post=[]),
     )
 
@@ -128,7 +128,7 @@ def test_post_hook_observes_only_calls_that_actually_executed(tmp_path):
             LLMResponse(content="noted"),
         ]),
         tools=[WriteFileTool()],
-        permission=Permission(allow_all=True),
+        permission=Permission(allow_all=True, project_root=tmp_path),
         hooks=Hooks(pre=[{"matcher": "write_file", "command": (
             f'"{Path(sys.executable).as_posix()}" -c "import sys; '
             "sys.exit(2 if 'a.txt' in sys.stdin.read() else 0)\""
@@ -158,7 +158,7 @@ def test_plan_mode_parallel_batch_refuses_writes_but_runs_reads(tmp_path):
             LLMResponse(content="plan ready"),
         ]),
         tools=[WriteFileTool(), GrepTool()],
-        permission=Permission(allow_all=True),
+        permission=Permission(allow_all=True, project_root=tmp_path),
     )
     agent.plan_mode = True
 
@@ -177,7 +177,7 @@ def test_ctrl_c_backfills_every_unanswered_tool_call(tmp_path):
             LLMResponse(tool_calls=[ToolCall(id="c1", name="boom", arguments={})]),
         ]),
         tools=[_BoomTool()],
-    )
+     permission=ScriptPermission(ask=lambda *_: "once"))
 
     with pytest.raises(KeyboardInterrupt):
         agent.chat("go")
@@ -197,7 +197,7 @@ def test_ctrl_c_in_a_parallel_batch_backfills_the_whole_batch(tmp_path):
             ]),
         ]),
         tools=[GrepTool(), _BoomTool()],
-    )
+     permission=ScriptPermission(ask=lambda *_: "once"))
 
     with pytest.raises(KeyboardInterrupt):
         agent.chat("go")

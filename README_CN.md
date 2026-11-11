@@ -81,3 +81,10 @@ python -m twine check dist/*
 ## 许可证
 
 采用 MIT 许可证，版权及许可声明保留在 [LICENSE](LICENSE) 中。维护者：[s0Ap224](https://github.com/s0Ap224)。
+
+
+## 工具权限与 Bash 审批
+
+使用 `--permission-mode default|acceptEdits|bypass` 选择权限模式。`--yes` 等价于 bypass，显式 ask、deny 和内容风险检查仍生效。审批展示完整命令、cwd 和执行后端，可将普通命令的精确授权保存到会话或当前项目。`/permissions` 查看规则，`/permissions reset` 清除当前项目授权。旧版全局 always 授权需要重新确认。
+
+实现流程与修改前后对比见 [Permission 与 Bash Command 审批](doc/permission-bash.md)。

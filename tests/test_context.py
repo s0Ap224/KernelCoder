@@ -10,6 +10,7 @@ from kernelcoder import Agent
 from kernelcoder.context import CompactResult, ContextLimitError, ContextManager, MessagePairingError, estimate_tokens
 from kernelcoder.demo import ScriptedLLM
 from kernelcoder.llm import LLMResponse, ToolCall
+from kernelcoder.permissions import Permission as ScriptPermission
 from kernelcoder.session import load_context_state, load_session, save_session
 from kernelcoder.tools.base import Tool
 from kernelcoder.tools.transcript import ReadTranscriptTool
@@ -101,7 +102,7 @@ def test_snip_samples_and_preserves_last_fifteen():
     assert len(messages) == 20
     assert [m["content"] for m in messages if not m["content"].startswith("[snip")] == [
         "1", "2", "11", "20", *map(str, range(27, 42))]
-    saved = next(r for r in records(ctx) if r["stage"] == "snip_compact")
+    saved = next(r for r in records(ctx) if r["stage"] == "snip_compact" and isinstance(r["content"], list))
     assert {m["content"] for m in saved["content"]} == set(map(str, range(3, 27))) - {"11", "20"}
     event = next(r for r in records(ctx) if "before_messages" in r)
     assert event["before_messages"] == 41
@@ -332,7 +333,7 @@ class OverflowLLM:
 def test_overflow_retry_never_reexecutes_tools(persistent, unrelated, expected):
     tool = CountTool()
     llm = OverflowLLM(persistent, unrelated)
-    agent = Agent(llm, tools=[tool])
+    agent = Agent(llm, tools=[tool], permission=ScriptPermission(ask=lambda *_: "once"))
     if persistent or unrelated:
         with pytest.raises(ValueError):
             agent.chat("work")
@@ -344,9 +345,9 @@ def test_overflow_retry_never_reexecutes_tools(persistent, unrelated, expected):
 
 
 def test_child_archive_capability_is_rebound():
-    parent = Agent(ScriptedLLM([]), tools=[])
+    parent = Agent(ScriptedLLM([]), tools=[], permission=ScriptPermission(ask=lambda *_: "once"))
     artifact = parent.context.store.write("private parent output", "compact_history")
-    child = Agent(parent.llm, tools=parent.tools, conversation_id=parent.context.store.conversation_id)
+    child = Agent(parent.llm, tools=parent.tools, conversation_id=parent.context.store.conversation_id, permission=ScriptPermission(ask=lambda *_: "once"))
     assert child.context.store.conversation_id == parent.context.store.conversation_id
     assert child.context.store.agent_id != parent.context.store.agent_id
     with pytest.raises(FileNotFoundError):
@@ -365,7 +366,7 @@ def test_summary_previous_state_and_recent_tail_survive_input_fitting():
 
 def test_each_agent_step_preserves_pairing_and_only_success_marks_seen():
     tool = CountTool()
-    agent = Agent(OverflowLLM(persistent=True), tools=[tool])
+    agent = Agent(OverflowLLM(persistent=True), tools=[tool], permission=ScriptPermission(ask=lambda *_: "once"))
     with pytest.raises(ValueError, match="context_length_exceeded"):
         agent.chat("keep original")
     assert not agent.context._meta(agent.messages[-1])["seen"]
@@ -375,7 +376,7 @@ def test_each_agent_step_preserves_pairing_and_only_success_marks_seen():
 def test_completed_parallel_results_survive_archive_failure(monkeypatch):
     tool = CountTool()
     llm = ScriptedLLM([LLMResponse(tool_calls=[ToolCall("a", "count", {}), ToolCall("b", "count", {})])])
-    agent = Agent(llm, tools=[tool])
+    agent = Agent(llm, tools=[tool], permission=ScriptPermission(ask=lambda *_: "once"))
     receive = agent.context.receive
 
     def fail_on_result(messages):
@@ -434,7 +435,7 @@ def test_summary_call_override_does_not_change_shared_model_settings(monkeypatch
 
 
 def test_no_summary_wire_metadata_and_reset_rebinds_reader():
-    agent = Agent(ScriptedLLM([LLMResponse(content="ok")]), tools=[])
+    agent = Agent(ScriptedLLM([LLMResponse(content="ok")]), tools=[], permission=ScriptPermission(ask=lambda *_: "once"))
     agent.chat("hello")
     artifact = agent.context.store.write("old namespace", "compact_history")
     assert all(set(m) == {"role", "content"} for m in agent.messages)

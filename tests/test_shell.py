@@ -58,7 +58,8 @@ def test_run_shell_falls_back_to_platform_shell():
         mock.patch("kernelcoder.shell.subprocess.run") as run,
     ):
         run_shell("pwd", check=False)
-    run.assert_called_once_with("pwd", shell=True, check=False)
+    assert run.call_args.kwargs == {"shell": False, "check": False}
+    assert run.call_args.args[0][-1] == "pwd"
 
 
 def test_posixify_rewrites_drive_paths():

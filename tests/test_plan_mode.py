@@ -25,7 +25,7 @@ def _agent(tmp_path, permission):
 
 
 def test_plan_mode_refuses_a_write_and_the_model_gets_the_reason(tmp_path):
-    agent = _agent(tmp_path, Permission(allow_all=True))  # even --yes loses to plan mode
+    agent = _agent(tmp_path, Permission(allow_all=True, project_root=tmp_path))  # even --yes loses to plan mode
     agent.plan_mode = True
 
     assert agent.chat("go") == "here is the plan"  # the loop survived the refusal
@@ -37,7 +37,7 @@ def test_plan_mode_refuses_a_write_and_the_model_gets_the_reason(tmp_path):
 
 
 def test_plan_mode_off_lets_the_same_write_through(tmp_path):
-    agent = _agent(tmp_path, Permission(allow_all=True))
+    agent = _agent(tmp_path, Permission(allow_all=True, project_root=tmp_path))
 
     assert agent.chat("go") == "here is the plan"
     assert (tmp_path / "a.txt").exists()

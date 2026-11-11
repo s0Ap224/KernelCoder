@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from functools import lru_cache
 
 # Drive-letter span: `C:\Users\...` up to a shell metacharacter. Escapes like
@@ -49,13 +50,27 @@ def _git_bash() -> str | None:
     return None
 
 
-def run_shell(command: str, check: bool = False, **kwargs) -> subprocess.CompletedProcess:
-    """Run one POSIX command string, via Git Bash on Windows when present.
+@dataclass(frozen=True)
+class PreparedShell:
+    command: str
+    executable: str
+    dialect: str
 
-    The list form bypasses cmd.exe entirely; without Git Bash we fall back
-    to the platform default (cmd.exe on Windows, /bin/sh elsewhere).
-    """
+
+def prepare_shell(command):
     bash = _git_bash()
-    if bash is not None:
-        return subprocess.run([bash, "-c", _posixify_drive_paths(command)], shell=False, check=check, **kwargs)
-    return subprocess.run(command, shell=True, check=check, **kwargs)
+    if bash:
+        return PreparedShell(_posixify_drive_paths(command), bash, "posix")
+    if os.name == "nt":
+        return PreparedShell(command, os.environ.get("COMSPEC", "cmd.exe"), "cmd")
+    return PreparedShell(command, "/bin/sh", "posix")
+
+
+def run_shell(command: str, check: bool = False, *, prepared=None, **kwargs):
+    if prepared is not None and prepared.command != command:
+        raise ValueError("Prepared shell command changed after approval")
+    prepared = prepared or prepare_shell(command)
+    if prepared.dialect == "cmd":
+        return subprocess.run([prepared.executable, "/d", "/s", "/c", prepared.command],
+                              shell=False, check=check, **kwargs)
+    return subprocess.run([prepared.executable, "-c", prepared.command], shell=False, check=check, **kwargs)

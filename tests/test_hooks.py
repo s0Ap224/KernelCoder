@@ -24,7 +24,7 @@ def _agent(tmp_path, hooks, permission=None):
             LLMResponse(content="done"),
         ]),
         tools=[WriteFileTool()],
-        permission=permission,
+        permission=permission or Permission(ask=lambda *_: "once"),
         hooks=hooks,
     )
 
@@ -117,6 +117,7 @@ def test_hooks_gate_each_call_of_a_parallel_batch(tmp_path):
     agent = Agent(
         llm=ScriptedLLM([LLMResponse(tool_calls=calls), LLMResponse(content="done")]),
         tools=[WriteFileTool()],
+        permission=Permission(ask=lambda *_: "once"),
         hooks=Hooks(
             pre=[{"matcher": "*", "command": f"cat >> {shlex.quote(pre_log.as_posix())}"}],
             post=[{"matcher": "*", "command": f"cat >> {shlex.quote(post_log.as_posix())}"}],
@@ -139,6 +140,7 @@ def test_sub_agent_inherits_the_hooks(tmp_path):
             LLMResponse(content="parent done"),
         ]),
         tools=[AgentTool(), WriteFileTool()],
+        permission=Permission(ask=lambda *_: "once"),
         hooks=Hooks(pre=[{"matcher": "write_file", "command": "sh -c 'echo no >&2; exit 2'"}], post=[]),
     )
 

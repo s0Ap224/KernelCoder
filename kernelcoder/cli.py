@@ -45,7 +45,8 @@ def _parse_args():
     p.add_argument("--base-url", help="API base URL (default: $OPENAI_BASE_URL)")
     p.add_argument("--api-key", help="API key (default: $OPENAI_API_KEY)")
     p.add_argument("-p", "--prompt", help="One-shot prompt (non-interactive mode)")
-    p.add_argument("--yes", action="store_true", help="Auto-approve every tool call (for scripts and CI)")
+    p.add_argument("--permission-mode", choices=("default", "acceptEdits", "bypass"))
+    p.add_argument("--yes", action="store_true", help="Bypass ordinary prompts; explicit ask and deny still apply")
     p.add_argument("--demo", action="store_true", help="Run a scripted model demo (E2B key needed unless unsafe)")
     p.add_argument("-r", "--resume", metavar="ID", help="Resume a saved session")
     p.add_argument("--sandbox", choices=("e2b", "unsafe"),
@@ -61,6 +62,8 @@ def _parse_args():
                    help="Manage --sandbox-session without an API key; diff required before apply")
     p.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
     args = p.parse_args()
+    if args.yes and args.permission_mode not in (None, "bypass"):
+        p.error("--yes conflicts with --permission-mode")
     args.mode_explicit = args.mode is not None or args.sandbox is not None
     selected = "unsafe" if args.mode == "local" else "e2b" if args.mode == "e2b" else None
     if selected and args.sandbox and selected != args.sandbox:
@@ -163,13 +166,6 @@ def _main(args):
         temperature=config.temperature,
         max_tokens=config.max_tokens,
     )
-    # consent layer: ask in the REPL, refuse in one-shot mode, --yes skips it
-    if args.yes:
-        permission = Permission(allow_all=True)
-    elif args.prompt:
-        permission = Permission()
-    else:
-        permission = Permission(ask=_ask_permission, persist_path=DEFAULT_STORE)
     skill_loader = SkillLoader()
     skill_tools = [SkillTool(skill_loader)] if skill_loader.skills else []
     workspace = None
@@ -212,6 +208,12 @@ def _main(args):
     except (WorkspaceError, OSError, ValueError) as e:
         console.print(f"MCP unavailable: {e}", markup=False)
         raise SystemExit(1) from e
+    permission = Permission(
+        ask=None if args.prompt else _ask_permission,
+        mode="bypass" if args.yes else (getattr(args, "permission_mode", None) or "default"),
+        persist_path=DEFAULT_STORE,
+        project_root=workspace.original if workspace else Path.cwd(),
+    )
     agent = Agent(
         llm=llm,
         tools=[*tools, *skill_tools, *(manager.tools if manager else
@@ -294,18 +296,27 @@ def _finish_sandbox(agent, config, store):
                       markup=False)
 
 
-def _ask_permission(tool_name: str, arguments: dict) -> str:
-    """REPL consent prompt. Anything but a clear yes counts as a no."""
-    console.print(f"\n[bold yellow]permission requested:[/] [cyan]{tool_name}[/cyan]({_brief(arguments)})")
+def _ask_permission(tool_name, arguments, *, decision=None, context=None):
+    context = context or {}
+    console.print(f"\nPermission requested: {tool_name}", markup=False)
+    for key, value in arguments.items():
+        console.print(f"{key}: {value}", markup=False)
+    console.print(f"Execution: {context.get('execution', 'local')}", markup=False)
+    if decision:
+        console.print(decision.reason, markup=False)
+    reusable = bool(decision and decision.reusable)
+    options = "[y] allow once  [n] deny"
+    if reusable:
+        console.print(f"Grant: exact bash command for this project, cwd and execution backend: {arguments['command']}", markup=False)
+        options += "  [s] allow for session  [p] save for project"
     try:
-        answer = pt_prompt("  [y] allow once  [a] always allow this tool  [n] deny: ").strip().lower()
+        answer = pt_prompt(options + ": ").strip().lower()
     except (EOFError, KeyboardInterrupt):
-        console.print("[dim]denied[/dim]")
         return "deny"
-    if answer in ("y", "yes"):
+    if answer in {"y", "yes"}:
         return "once"
-    if answer in ("a", "always"):
-        return "always"
+    if reusable and answer in {"s", "p"}:
+        return "session" if answer == "s" else "project"
     return "deny"
 
 
@@ -340,7 +351,7 @@ def _run_once(agent: Agent, prompt: str):
 def _repl(agent: Agent, config: Config):
     """Interactive read-eval-print loop."""
     perm = agent.permission
-    mode = "auto-approve every tool call (--yes)" if (perm and perm.allow_all) else "ask before mutating tools"
+    mode = f"permission mode: {perm.mode}" if perm else "default permissions"
     mcp_count = sum(1 for t in agent.tools if t.name.startswith("mcp__"))
     console.print(Panel(
         f"[bold]KernelCoder[/bold] v{__version__}\n"
@@ -411,6 +422,14 @@ def _repl(agent: Agent, config: Config):
                     _sandbox_action(agent.workspace, bash.runner, action)
                 except (WorkspaceError, OSError, ValueError, subprocess.SubprocessError) as e:
                     console.print(f"Sandbox: {e}", markup=False)
+            continue
+        if user_input in {"/permissions", "/permissions reset"}:
+            try:
+                if user_input.endswith(" reset"):
+                    agent.permission.reset()
+                console.print(agent.permission.describe(), markup=False)
+            except OSError as exc:
+                console.print(f"Permission store error: {exc}", markup=False)
             continue
         if user_input == "/reset":
             agent.reset()
@@ -592,6 +611,7 @@ def _show_help():
         "[bold]Commands:[/bold]\n"
         "  /help          Show this help\n"
         "  /reset         Clear conversation history\n"
+        "  /permissions   Show project grants; /permissions reset clears them\n"
         "  /model         Show current model\n"
         "  /model <name>  Switch model mid-conversation\n"
         "  /tokens        Show token usage\n"

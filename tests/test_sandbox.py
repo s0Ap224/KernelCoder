@@ -1,5 +1,4 @@
 """Host-side contract tests; these are NOT evidence of OS containment."""
-
 import json
 import os
 from types import SimpleNamespace
@@ -11,6 +10,7 @@ from kernelcoder.agent import Agent
 from kernelcoder.demo import ScriptedLLM
 from kernelcoder.llm import LLMResponse, ToolCall
 from kernelcoder.permissions import Permission
+from kernelcoder.permissions import Permission as ScriptPermission
 from kernelcoder.sandbox import BoundedOutput, SandboxRunner, classify
 from kernelcoder.tools import ALL_TOOLS
 from kernelcoder.tools.bash import BashTool
@@ -183,7 +183,7 @@ def test_symlink_cannot_read_outside(ws, tmp_path):
 
 
 def test_file_tools_share_copy_undo_and_cannot_read_host(ws):
-    agent = Agent(ScriptedLLM([]), tools=[type(t)() for t in ALL_TOOLS], workspace=ws)
+    agent = Agent(ScriptedLLM([]), tools=[type(t)() for t in ALL_TOOLS], workspace=ws, permission=ScriptPermission(ask=lambda *_: "once"))
     def call(name, **kwargs):
         return agent._exec_tool(ToolCall(id="1", name=name, arguments=kwargs))
     assert "Edited" in call("edit_file", file_path="code.py", old_string="1", new_string="2")
@@ -269,7 +269,7 @@ def test_busy_session_rejects_second_process_handle(ws):
 def test_subagent_inherits_workspace_and_hooks_disabled(ws, monkeypatch):
     import kernelcoder.agent as module
     captured = []
-    parent = Agent(ScriptedLLM([]), tools=[type(t)() for t in ALL_TOOLS], workspace=ws, hooks=Mock())
+    parent = Agent(ScriptedLLM([]), tools=[type(t)() for t in ALL_TOOLS], workspace=ws, hooks=Mock(), permission=ScriptPermission(ask=lambda *_: "once"))
     real = module.Agent
     def make(**kwargs):
         child = real(**kwargs)
@@ -306,7 +306,7 @@ def test_cli_defaults_to_pending_e2b(monkeypatch):
 
 
 def test_agent_batch_observes_edits_in_order(ws):
-    agent = Agent(ScriptedLLM([]), tools=[type(t)() for t in ALL_TOOLS], workspace=ws)
+    agent = Agent(ScriptedLLM([]), tools=[type(t)() for t in ALL_TOOLS], workspace=ws, permission=ScriptPermission(ask=lambda *_: "once"))
     result = agent._exec_tools_parallel([
         ToolCall(id="1", name="write_file", arguments={"file_path": "created", "content": "new content"}),
         ToolCall(id="2", name="read_file", arguments={"file_path": "created"}),
@@ -317,7 +317,7 @@ def test_agent_batch_observes_edits_in_order(ws):
 def test_mcp_cannot_be_registered_in_sandbox(ws):
     tool = SimpleNamespace(name="mcp__host_exec")
     with pytest.raises(ValueError, match="MCP"):
-        Agent(ScriptedLLM([]), tools=[tool], workspace=ws)
+        Agent(ScriptedLLM([]), tools=[tool], workspace=ws, permission=ScriptPermission(ask=lambda *_: "once"))
 
 
 def test_cli_yes_leaves_original_and_persists_copy(ws, monkeypatch):
@@ -346,7 +346,7 @@ def test_cli_yes_leaves_original_and_persists_copy(ws, monkeypatch):
 def test_reused_agent_tool_cannot_take_another_parents_policy(ws):
     from kernelcoder.tools.agent import AgentTool
     shared = AgentTool()
-    sandboxed = Agent(ScriptedLLM([]), tools=[shared], workspace=ws)
-    unsafe = Agent(ScriptedLLM([]), tools=[shared], hooks=Mock())
+    sandboxed = Agent(ScriptedLLM([]), tools=[shared], workspace=ws, permission=ScriptPermission(ask=lambda *_: "once"))
+    unsafe = Agent(ScriptedLLM([]), tools=[shared], hooks=Mock(), permission=ScriptPermission(ask=lambda *_: "once"))
     assert sandboxed._tool_by_name["agent"]._parent_agent is sandboxed
     assert unsafe._tool_by_name["agent"]._parent_agent is unsafe

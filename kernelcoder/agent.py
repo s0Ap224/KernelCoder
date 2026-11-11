@@ -58,7 +58,7 @@ class Agent:
         self.tools.append(ReadTranscriptTool(self.context))
         # A shared AgentTool must never acquire a different parent's policy.
         self.tools = [copy.copy(t) if isinstance(t, AgentTool) else t for t in self.tools]
-        self.permission = permission
+        self.permission = permission if permission is not None else Permission()
         self.hooks = None if workspace else hooks
         if any(type(t) is ManagedMCPTool and t.manager.workspace is not workspace for t in self.tools):
             raise ValueError("Managed MCP tools must be bound to this task workspace")
@@ -203,19 +203,25 @@ class Agent:
     def _permit(self, tc) -> str | None:
         """Consent check for one call. None means go ahead; a string is the
         refusal, returned as the tool result instead of executing."""
-        # plan mode outranks consent, even --yes: while it's on nothing mutates
+        from .tools.bash import BashTool
         tool = self._tool_by_name.get(tc.name)
-        managed_read = type(tool) is ManagedMCPTool and tool.manager.workspace is self.workspace
-        if self.plan_mode and tc.name not in Permission.READ_ONLY and not managed_read:
-            return (
-                "Plan mode is on, so this call was refused: plan mode is "
-                "read-only. Do not retry it. Keep investigating with the "
-                "read-only tools, then present the plan and stop. The user can "
-                'approve it by typing "approve", or exit plan mode with /plan.'
-            )
-        if self.permission is None:
-            return None
-        return self.permission.check(tool.permission_key if managed_read else tc.name, tc.arguments)
+        if tool is None:
+            return f"Error: unknown tool '{tc.name}'"
+        try:
+            inspect.signature(tool.execute).bind(**tc.arguments)
+            context = {"plan_mode": self.plan_mode, "execution": "e2b" if self.workspace else "local"}
+            if type(tool) is ManagedMCPTool and tool.manager.workspace is self.workspace:
+                context.update(managed_read=True, permission_key=tool.permission_key)
+            if type(tool) is BashTool:
+                tc.arguments, tc._prepared_shell = tool.prepare(tc.arguments)
+                context.update(cwd=tc.arguments["cwd"], dialect=tc._prepared_shell.dialect if tc._prepared_shell else "posix")
+            if self.workspace:
+                context["tree"] = self.workspace.tree
+                if "file_path" in tc.arguments:
+                    context["path"] = self.workspace.path(tc.arguments["file_path"])
+            return self.permission.authorize(tool, tc.arguments, context=context)
+        except Exception as exc:  # noqa: BLE001 -- preparation failures become tool results
+            return f"Error: bad arguments for {tc.name}: {exc}"
 
     def _exec_tool(self, tc) -> str:
         """Execute a single call under the workspace guard, when configured."""
@@ -244,6 +250,9 @@ class Agent:
             return f"Error: bad arguments for {tc.name}: {e}"
         # a tool that blows up gets reported back as text, never kills the loop
         try:
+            from .tools.bash import BashTool
+            if type(tool) is BashTool and hasattr(tc, "_prepared_shell"):
+                return tool.execute_prepared(**tc.arguments, prepared=tc._prepared_shell)
             return tool.execute(**tc.arguments)
         except Exception as e:  # noqa: BLE001
             return f"Error executing {tc.name}: {e}"

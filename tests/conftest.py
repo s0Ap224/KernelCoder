@@ -67,3 +67,11 @@ def repl_with(monkeypatch, agent, inputs, config=None):
     config = config or Config.from_env()
     cli._repl(agent, config)
     return config
+
+
+@pytest.fixture(autouse=True)
+def _shell_cwd_isolated():
+    from kernelcoder.tools.bash import set_tracked_cwd
+    set_tracked_cwd(None)
+    yield
+    set_tracked_cwd(None)

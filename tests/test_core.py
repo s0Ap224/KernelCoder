@@ -1,5 +1,4 @@
 """Tests for core modules: config, context, session, imports."""
-
 import json
 import re
 import tempfile
@@ -13,6 +12,7 @@ from openai import BadRequestError
 from kernelcoder import ALL_TOOLS, LLM, Agent, Config, __version__
 from kernelcoder import session as session_module
 from kernelcoder.context import estimate_tokens
+from kernelcoder.permissions import Permission as ScriptPermission
 from kernelcoder.session import list_sessions, load_session, save_session
 from tests.conftest import get_tool
 
@@ -255,7 +255,7 @@ def test_parallel_bash_calls_inherit_and_merge_session_cwd(tmp_path):
         return s
 
     bash = get_tool("bash")
-    agent = Agent(llm=LLM.__new__(LLM), tools=[bash])
+    agent = Agent(llm=LLM.__new__(LLM), tools=[bash], permission=ScriptPermission(ask=lambda *_: "once"))
     target = tmp_path / "proj"
     target.mkdir()
     (tmp_path / "marker.txt").write_text("x")
@@ -283,7 +283,7 @@ def test_parallel_bash_calls_inherit_and_merge_session_cwd(tmp_path):
 def test_parallel_edits_to_one_file_both_land(tmp_path):
     """Two edit_file calls on one file in one batch must not lose either."""
     edit = get_tool("edit_file")
-    agent = Agent(llm=LLM.__new__(LLM), tools=[edit])
+    agent = Agent(llm=LLM.__new__(LLM), tools=[edit], permission=ScriptPermission(ask=lambda *_: "once"))
     f = tmp_path / "a.txt"
     f.write_text("one\ntwo\nthree\n")
 
@@ -303,7 +303,7 @@ def test_sub_agent_cwd_does_not_leak_into_parent(tmp_path, monkeypatch):
     from kernelcoder.tools.agent import AgentTool
     from kernelcoder.tools.bash import get_tracked_cwd, set_tracked_cwd
 
-    parent = Agent(llm=LLM.__new__(LLM), tools=[])
+    parent = Agent(llm=LLM.__new__(LLM), tools=[], permission=ScriptPermission(ask=lambda *_: "once"))
     tool = AgentTool()
     tool._parent_agent = parent
     target = tmp_path / "sub"
@@ -328,7 +328,7 @@ def test_reset_clears_todo_list():
     from kernelcoder.tools.todo import TodoWriteTool
 
     todo = TodoWriteTool()
-    agent = Agent(llm=LLM.__new__(LLM), tools=[todo])
+    agent = Agent(llm=LLM.__new__(LLM), tools=[todo], permission=ScriptPermission(ask=lambda *_: "once"))
     todo.execute(tasks=[{"content": "fix parser bug", "status": "in_progress"}])
     assert "fix parser bug" in agent._full_messages()[0]["content"]
     agent.reset()
@@ -339,7 +339,7 @@ def test_reset_clears_todo_list():
 def test_agent_tool_scope_is_per_instance():
     """An Agent restricted to a subset of tools must not resolve tools outside it."""
     only_read = [get_tool("read_file")]
-    agent = Agent(llm=LLM.__new__(LLM), tools=only_read)
+    agent = Agent(llm=LLM.__new__(LLM), tools=only_read, permission=ScriptPermission(ask=lambda *_: "once"))
     assert set(agent._tool_by_name) == {"read_file", "read_transcript"}
 
     class _TC:
@@ -362,7 +362,7 @@ def test_exec_tool_distinguishes_bad_args_from_internal_error():
         def execute(self):
             raise TypeError("internal explosion")
 
-    agent = Agent(llm=LLM.__new__(LLM), tools=[_Boom()])
+    agent = Agent(llm=LLM.__new__(LLM), tools=[_Boom()], permission=ScriptPermission(ask=lambda *_: "once"))
 
     class _BadArgs:
         name, id, arguments = "boom", "1", {"unexpected": 1}
@@ -377,7 +377,7 @@ def test_exec_tool_distinguishes_bad_args_from_internal_error():
 
 def test_interrupt_backfills_missing_tool_replies():
     """A half-finished tool round must be repaired so history stays valid."""
-    agent = Agent(llm=LLM.__new__(LLM), tools=[])
+    agent = Agent(llm=LLM.__new__(LLM), tools=[], permission=ScriptPermission(ask=lambda *_: "once"))
     agent.messages = [
         {"role": "assistant", "content": None, "tool_calls": [{"id": "a"}, {"id": "b"}]},
         {"role": "tool", "tool_call_id": "a", "content": "done"},
@@ -400,7 +400,7 @@ def test_todo_list_is_injected_into_system_context():
     """After a todo_write call, the next request must carry the list in the system message."""
     from kernelcoder.tools.todo import TodoWriteTool
     todo = TodoWriteTool()
-    agent = Agent(llm=LLM.__new__(LLM), tools=[todo])
+    agent = Agent(llm=LLM.__new__(LLM), tools=[todo], permission=ScriptPermission(ask=lambda *_: "once"))
 
     todo.execute(tasks=[
         {"content": "fix the bug", "status": "in_progress"},
@@ -416,7 +416,7 @@ def test_todo_injection_tracks_updates():
     """The injection is rebuilt every round: updates show, an empty list injects nothing."""
     from kernelcoder.tools.todo import TodoWriteTool
     todo = TodoWriteTool()
-    agent = Agent(llm=LLM.__new__(LLM), tools=[todo])
+    agent = Agent(llm=LLM.__new__(LLM), tools=[todo], permission=ScriptPermission(ask=lambda *_: "once"))
 
     todo.execute(tasks=[{"content": "only task", "status": "in_progress"}])
     todo.execute(tasks=[{"content": "only task", "status": "done"}])
@@ -429,7 +429,7 @@ def test_todo_injection_tracks_updates():
 
 
 def test_agent_without_todo_tool_injects_nothing():
-    agent = Agent(llm=LLM.__new__(LLM), tools=[get_tool("read_file")])
+    agent = Agent(llm=LLM.__new__(LLM), tools=[get_tool("read_file")], permission=ScriptPermission(ask=lambda *_: "once"))
     assert "# Current task list" not in agent._full_messages()[0]["content"]
 
 

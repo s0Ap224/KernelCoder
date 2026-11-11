@@ -3,7 +3,6 @@
 The fake server is a stdlib-only Python script run via sys.executable, so
 these tests need no shell and run the same on Windows.
 """
-
 import json
 import logging
 import sys
@@ -18,6 +17,7 @@ from kernelcoder.hooks import Hooks
 from kernelcoder.llm import LLMResponse, ToolCall
 from kernelcoder.mcp import MCPError, load_mcp_tools
 from kernelcoder.permissions import Permission
+from kernelcoder.permissions import Permission as ScriptPermission
 from tests.conftest import repl_with
 
 FAKE_SERVER = """
@@ -95,7 +95,7 @@ def _echo_call(call_id="c1", text="hi"):
 
 
 def _agent(script, tools, **kwargs):
-    return Agent(llm=ScriptedLLM(script), tools=tools, **kwargs)
+    return Agent(llm=ScriptedLLM(script), tools=tools, **kwargs, permission=ScriptPermission(ask=lambda *_: "once"))
 
 
 def test_handshake_registers_each_remote_tool(mcp_config):

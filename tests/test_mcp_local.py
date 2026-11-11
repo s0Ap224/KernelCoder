@@ -16,7 +16,7 @@ from kernelcoder.demo import ScriptedLLM
 from kernelcoder.llm import LLMResponse, ToolCall
 from kernelcoder.mcp import MCPClient, MCPError
 from kernelcoder.mcp_local import MCPManager, clean_environment, revision
-from kernelcoder.permissions import Permission
+from kernelcoder.permissions import Permission, PermissionRule
 from kernelcoder.workspace import SandboxWorkspace, WorkspaceError
 from tests.test_mcp import FAKE_SERVER
 
@@ -56,11 +56,11 @@ def test_managed_tool_cannot_attach_to_another_workspace(manager, tmp_path):
 def test_old_name_grant_does_not_authorize_managed_host_execution(manager):
     tool = manager.tools[0]
     permission = Permission()
-    permission._always.add(tool.name)
+    permission.rules.append(PermissionRule("allow", tool.name))
     agent = Agent(ScriptedLLM([]), tools=manager.tools, workspace=manager.workspace, permission=permission)
     call = ToolCall("id", tool.name, {})
     assert "Permission denied" in agent._permit(call)
-    permission._always.add(tool.permission_key)
+    permission.rules.append(PermissionRule("allow", tool.permission_key))
     assert agent._permit(call) is None
     agent.plan_mode = True
     assert agent._permit(call) is None

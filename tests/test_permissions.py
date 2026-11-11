@@ -1,3 +1,5 @@
+import pytest
+
 """Consent gating for mutating tools: the Permission layer and its wiring."""
 
 from kernelcoder import Agent
@@ -51,7 +53,7 @@ def test_allow_once_asks_again_for_the_next_call(tmp_path):
     assert (tmp_path / "a.txt").exists() and (tmp_path / "b.txt").exists()
 
 
-def test_always_allow_is_remembered_for_the_session(tmp_path):
+def test_old_whole_tool_grant_is_not_created(tmp_path):
     asked = []
     agent = Agent(
         llm=ScriptedLLM(_two_writes_then_text(tmp_path)),
@@ -60,8 +62,9 @@ def test_always_allow_is_remembered_for_the_session(tmp_path):
     )
 
     assert agent.chat("go") == "done"
-    assert asked == ["write_file"]  # the second call went straight through
-    assert (tmp_path / "a.txt").exists() and (tmp_path / "b.txt").exists()
+    assert asked == ["write_file", "write_file"]
+    assert not (tmp_path / "a.txt").exists()
+    assert not (tmp_path / "b.txt").exists()
 
 
 def test_deny_skips_execution_and_reports_back(tmp_path):
@@ -102,7 +105,7 @@ def test_allow_all_approves_without_any_callback(tmp_path):
     agent = Agent(
         llm=ScriptedLLM(_two_writes_then_text(tmp_path)),
         tools=[WriteFileTool()],
-        permission=Permission(allow_all=True),
+        permission=Permission(allow_all=True, project_root=tmp_path),
     )
 
     assert agent.chat("go") == "done"
@@ -114,24 +117,25 @@ def test_always_allow_persists_across_instances(tmp_path):
     asked = []
     first = Permission(ask=lambda name, args: asked.append(name) or "always",
                        persist_path=store)
-    assert first.check("bash", {}) is None
+    assert first.check("bash", {"command": "git status"}) is None
 
     second = Permission(persist_path=store)  # a fresh process, nobody to ask
-    assert second.check("bash", {}) is None        # the grant survived
+    assert second.check("bash", {"command": "git status"}) is None        # the grant survived
     assert second.check("edit_file", {}) is not None  # but only that tool
     assert asked == ["bash"]
 
 
-def test_corrupt_permissions_store_is_ignored(tmp_path):
+def test_corrupt_permissions_store_is_rejected(tmp_path):
     store = tmp_path / "permissions.json"
     store.write_text("{ nope", encoding="utf-8")
 
-    assert "non-interactive" in Permission(persist_path=store).check("bash", {})
+    with pytest.raises(ValueError, match="Invalid permission store"):
+        Permission(persist_path=store)
 
 
 def test_without_persist_path_nothing_is_written(tmp_path):
-    p = Permission(ask=lambda name, args: "always")
-    assert p.check("bash", {}) is None
+    p = Permission(ask=lambda name, args: "session")
+    assert p.check("bash", {"command": "git status"}) is None
     assert not (tmp_path / "permissions.json").exists()
 
 
@@ -193,7 +197,7 @@ def test_ask_prompt_maps_answers(monkeypatch):
     monkeypatch.setattr(cli, "pt_prompt", lambda *a, **k: next(answers))
 
     assert cli._ask_permission("bash", {"command": "ls"}) == "once"
-    assert cli._ask_permission("bash", {}) == "always"
+    assert cli._ask_permission("bash", {}) == "deny"
     assert cli._ask_permission("bash", {}) == "deny"
     assert cli._ask_permission("bash", {}) == "deny"  # junk input is a no
 
